@@ -27,15 +27,13 @@ user=$(dialog --stdout --inputbox "Enter admin username" 0 0) || exit 1
 clear
 : ${user:?"user cannot be empty"}
 
-password=$(dialog --stdout --passwordbox "Enter admin password (will not print)" 0 0) || exit 1
+password=$(dialog --stdout --inputbox "Enter admin password (will print)" 0 0) || exit 1
 clear
 : ${password:?"password cannot be empty"}
-password2=$( \
-  dialog --stdout --passwordbox \
-  "Enter admin password again (will not print)" 0 0 \
-) || exit 1
+
+luks_password=$(dialog --stdout --inputbox "Enter LUKS password (will print)" 0 0) || exit 1
 clear
-[[ "$password" == "$password2" ]] || ( echo "Passwords did not match"; exit 1; )
+: ${luks_password:?"luks_password cannot be empty"}
 
 devicelist=$(lsblk -dplnx size -o name,size | grep -Ev "boot|rpmb|loop" | tac)
 device=$(dialog --stdout --menu "Select installtion disk" 0 0 0 ${devicelist}) || exit 1
@@ -59,13 +57,24 @@ parted --script "${device}" -- \
 part_boot="$(ls ${device}* | grep -E "^${device}p?1$")"
 part_root="$(ls ${device}* | grep -E "^${device}p?2$")"
 
+# Wife any old fs stuff from the new partitions
 wipefs "${part_boot}"
 wipefs "${part_root}"
 
+# Set up the EFI partition
 mkfs.vfat -F32 "${part_boot}"
-mkfs.f2fs -f "${part_root}"
 
-mount "${part_root}" /mnt
+cryptsetup -y -v luksFormat --type luks2 $part_root <<< "${luks_password}"
+cryptsetup open $part_root cryptroot <<< "${luks_password}"
+mkfs.ext4 /dev/mapper/cryptroot
+mount /dev/mapper/cryptroot /mnt
+
+# Unmount, lock, unlock and remount the partition to ensure it works
+umount /mnt
+cryptsetup close cryptroot
+cryptsetup open $part_root cryptroot <<< "${luks_password}"
+mount /dev/mapper/cryptroot /mnt
+
 mkdir /mnt/boot
 mount "${part_boot}" /mnt/boot
 
@@ -101,7 +110,17 @@ echo "${hostname}" > /mnt/etc/hostname
 #Server = $REPO_URL
 #EOF
 
+# Set up the hooks correctly for allowing us to unlock the encrypted partitions
+cat /mnt/etc/mkinitcpio.conf | grep -E '^HOOKS' > original_hooks.txt
+sed -i \
+  's/^HOOKS.*/HOOKS=(base udev keyboard keymap autodetect modconf block encrypt filesystems fsck)/' \
+  /mnt/etc/mkinitcpio.conf
+
+# Install the bootloader
 arch-chroot /mnt bootctl install
+
+# Rebuild the initramfs image
+arch-chroot /mnt mkinitcpio -p linux
 
 cat <<EOF > /mnt/boot/loader/loader.conf
 default arch
@@ -111,9 +130,8 @@ cat <<EOF > /mnt/boot/loader/entries/arch.conf
 title    Arch Linux
 linux    /vmlinuz-linux
 initrd   /initramfs-linux.img
-options  root=PARTUUID=$(blkid -s PARTUUID -o value "$part_root") rw
+options  cryptdevice=PARTUUID=$(blkid -s PARTUUID -o value "$part_root"):cryptroot root=/dev/mapper/cryptroot rw
 EOF
-
 
 # Set the timezone
 arch-chroot /mnt ln -sf /usr/share/zoneinfo/America/Los_Angeles /etc/localtime
@@ -137,11 +155,24 @@ EOF
 
 arch-chroot /mnt useradd -mU -s /usr/bin/zsh -G wheel,uucp,video,audio,storage,games,input "$user"
 touch /mnt/home/$user/.zshrc
-arch-chroot /mnt chown $user: /mnt/home/$user/.zshrc
+arch-chroot /mnt chown $user: /home/$user/.zshrc
+
+# Set up the wheel group to have sudo access
+echo "%wheel ALL=(ALL) ALL" >> /mnt/etc/sudoers
 
 # Change root user's shell to zsh
 #arch-chroot /mnt chsh -s /usr/bin/zsh
 
 echo "$user:$password" | chpasswd --root /mnt
 echo "root:$password" | chpasswd --root /mnt
+
+cat <<EOF
+
+
+
+Installation complete!
+
+You may now unmount everything and reboot, or enter the installed environment
+via arch-chroot /mnt.
+EOF
 

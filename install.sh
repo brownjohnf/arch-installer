@@ -5,6 +5,24 @@
 set -euo pipefail
 trap 's=$?; echo "$0: Error on line "$LINENO": $BASH_COMMAND"; exit $s' ERR
 
+# If CLEAN is set, clean up any broken state we may have lying around
+if [ -n $CLEAN ]; then
+  set +e
+
+  umount /mnt/boot
+  umount /mnt/var
+  umount /mnt/home
+  umount /mnt/data
+  umount /mnt
+
+  vgchange -a n lvmroot
+  pvremove -ff /dev/mapper/cryptroot
+
+  set -e
+
+  cryptsetup close /dev/mapper/cryptroot
+fi
+
 # Ensure we've got the system booted in EFI
 ls /sys/firmware/efi/efivars > /dev/null
 
@@ -13,10 +31,13 @@ MIRRORLIST_URL="https://www.archlinux.org/mirrorlist/?country=US&protocol=https&
 
 pacman -Sy --noconfirm pacman-contrib
 
-echo "Updating mirror list"
-curl -s "$MIRRORLIST_URL" | \
-    sed -e 's/^#Server/Server/' -e '/^#/d' | \
-    rankmirrors -n 5 - > /etc/pacman.d/mirrorlist
+# Only rank the mirrors if we're not cleaning up, indicating this is a fresh run
+if [ -z $CLEAN ]; then
+  echo "Updating mirror list"
+  curl -s "$MIRRORLIST_URL" | \
+      sed -e 's/^#Server/Server/' -e '/^#/d' | \
+      rankmirrors -n 5 - > /etc/pacman.d/mirrorlist
+fi
 
 ### Get infomation from user ###
 hostname=$(dialog --stdout --inputbox "Enter hostname" 0 0) || exit 1
@@ -50,33 +71,70 @@ parted --script "${device}" -- \
   mklabel gpt \
   mkpart ESP fat32 1Mib 129MiB \
   set 1 boot on \
-  mkpart primary ext4 129MiB 100%
+  mkpart primary ext4 129Mib 1024MiB \
+  mkpart primary ext4 1024MiB 100%
 
 # Simple globbing was not enough as on one device I needed to match /dev/mmcblk0p1
 # but not /dev/mmcblk0boot1 while being able to match /dev/sda1 on other devices.
 part_boot="$(ls ${device}* | grep -E "^${device}p?1$")"
-part_root="$(ls ${device}* | grep -E "^${device}p?2$")"
+part_root="$(ls ${device}* | grep -E "^${device}p?3$")"
 
-# Wife any old fs stuff from the new partitions
+# Wipe any old fs stuff from the new partitions
 wipefs "${part_boot}"
 wipefs "${part_root}"
 
 # Set up the EFI partition
 mkfs.vfat -F32 "${part_boot}"
 
-cryptsetup -y -v luksFormat --type luks2 $part_root <<< "${luks_password}"
+cryptsetup -v luksFormat --type luks2 $part_root <<< "${luks_password}"
 cryptsetup open $part_root cryptroot <<< "${luks_password}"
-mkfs.ext4 /dev/mapper/cryptroot
-mount /dev/mapper/cryptroot /mnt
+
+# Set up LVM
+pvcreate /dev/mapper/cryptroot
+vgcreate lvmroot /dev/mapper/cryptroot
+# If the root partition is less than 10G, make a 3G root partition
+if [ $(lsblk -o SIZE --noheadings --nodeps -b $part_root) -lt 10000000000 ]; then
+  lvcreate -L 3GB lvmroot -n root
+else
+  lvcreate -l 15%VG lvmroot -n root
+fi
+lvcreate -l 10%VG lvmroot -n var
+lvcreate -l 20%VG lvmroot -n home
+lvcreate -l 100%FREE lvmroot -n data
+
+mkfs.ext4 /dev/lvmroot/root
+mkfs.ext4 /dev/lvmroot/var
+mkfs.ext4 /dev/lvmroot/home
+mkfs.ext4 /dev/lvmroot/data
+
+function mount_all () {
+  sleep 1
+  mount /dev/lvmroot/root /mnt
+
+  mkdir -p /mnt/{boot,var,home,data}
+
+  mount "${part_boot}" /mnt/boot
+  mount /dev/lvmroot/var /mnt/var
+  mount /dev/lvmroot/home /mnt/home
+  mount /dev/lvmroot/data /mnt/data
+}
+mount_all
 
 # Unmount, lock, unlock and remount the partition to ensure it works
+umount /mnt/boot
+umount /mnt/var
+umount /mnt/home
+umount /mnt/data
 umount /mnt
+
+# Deactivate the volume group. If you don't do this, you can't close the
+# cryptroot
+vgchange -a n lvmroot
+
 cryptsetup close cryptroot
 cryptsetup open $part_root cryptroot <<< "${luks_password}"
-mount /dev/mapper/cryptroot /mnt
 
-mkdir /mnt/boot
-mount "${part_boot}" /mnt/boot
+mount_all
 
 ### Install and configure the basic system ###
 
@@ -102,7 +160,15 @@ mount "${part_boot}" /mnt/boot
 
 pacstrap /mnt base sudo zsh # base-devel networkmanager
 genfstab -t PARTUUID /mnt >> /mnt/etc/fstab
-echo "${hostname}" > /mnt/etc/hostname
+cat /mnt/etc/fstab
+
+hostname_short=$(echo $hostname | cut -d '.' -f 1)
+cat <<EOF > /mnt/etc/hosts
+127.0.0.1 localhost
+::1       localhost
+::1       $hostname $hostname_short
+127.0.1.1	$hostname $hostname_short
+EOF
 
 #cat >>/mnt/etc/pacman.conf <<EOF
 #[mdaffin]
@@ -113,7 +179,7 @@ echo "${hostname}" > /mnt/etc/hostname
 # Set up the hooks correctly for allowing us to unlock the encrypted partitions
 cat /mnt/etc/mkinitcpio.conf | grep -E '^HOOKS' > original_hooks.txt
 sed -i \
-  's/^HOOKS.*/HOOKS=(base udev keyboard keymap autodetect modconf block encrypt filesystems fsck)/' \
+  's/^HOOKS.*/HOOKS=(base udev keyboard keymap autodetect modconf block encrypt lvm2 filesystems fsck)/' \
   /mnt/etc/mkinitcpio.conf
 
 # Install the bootloader
@@ -130,7 +196,7 @@ cat <<EOF > /mnt/boot/loader/entries/arch.conf
 title    Arch Linux
 linux    /vmlinuz-linux
 initrd   /initramfs-linux.img
-options  cryptdevice=PARTUUID=$(blkid -s PARTUUID -o value "$part_root"):cryptroot root=/dev/mapper/cryptroot rw
+options  cryptdevice=PARTUUID=$(blkid -s PARTUUID -o value "$part_root"):cryptroot root=/dev/lvmroot/root rw
 EOF
 
 # Set the timezone
@@ -144,14 +210,6 @@ echo "en_US.UTF-8 UTF-8" > /mnt/etc/locale.gen
 arch-chroot /mnt locale-gen
 echo "LANG=en_US.UTF-8" > /mnt/etc/locale.conf
 echo "KEYMAP=dvorak" > /mnt/etc/vconsole.conf
-
-hostname_short=$(echo $hostname | cut -d '.' -f 1)
-cat <<EOF > /mnt/etc/hosts
-127.0.0.1 localhost
-::1       localhost
-::1       $hostname $hostname_short
-127.0.1.1	$hostname $hostname_short
-EOF
 
 arch-chroot /mnt useradd -mU -s /usr/bin/zsh -G wheel,uucp,video,audio,storage,games,input "$user"
 touch /mnt/home/$user/.zshrc

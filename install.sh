@@ -34,6 +34,7 @@ ls /sys/firmware/efi/efivars > /dev/null
 
 MIRRORLIST_URL="https://www.archlinux.org/mirrorlist/?country=US&protocol=https&use_mirror_status=on"
 
+# TODO figure out how to make this work without a custom archiso image
 # if [ -n $ZFS ]; then
 # cat <<EOF >>/etc/pacman.conf
 # [archzfs]
@@ -58,30 +59,23 @@ if [ -z $CLEAN ]; then
 fi
 
 ### Get infomation from user ###
-hostname=$(dialog --stdout --inputbox "Enter hostname" 0 0) || exit 1
+devicelist=$(lsblk -dplnx size -o name,size | grep -Ev "boot|rpmb|loop" | tac)
+device=$(dialog --stdout --menu "Select installtion disk" 0 0 0 ${devicelist}) || exit 1
 clear
-: ${hostname:?"hostname cannot be empty"}
-
-user=$(dialog --stdout --inputbox "Enter admin username" 0 0) || exit 1
-clear
-: ${user:?"user cannot be empty"}
-
-password=$(dialog --stdout --inputbox "Enter admin password (will print)" 0 0) || exit 1
-clear
-: ${password:?"password cannot be empty"}
 
 luks_password=$(dialog --stdout --inputbox "Enter LUKS password (will print)" 0 0) || exit 1
 clear
 : ${luks_password:?"luks_password cannot be empty"}
 
-devicelist=$(lsblk -dplnx size -o name,size | grep -Ev "boot|rpmb|loop" | tac)
-device=$(dialog --stdout --menu "Select installtion disk" 0 0 0 ${devicelist}) || exit 1
+hostname=$(dialog --stdout --inputbox "Enter hostname" 0 0) || exit 1
 clear
+: ${hostname:?"hostname cannot be empty"}
 
 wifi=false
 if dialog --yesno "Configure wifi for target system?" 0 0; then
   wifi=true
 fi
+clear
 
 if [ "$wifi" == "true" ]; then
   wifi_ssid=$(dialog --stdout --inputbox "Enter wifi SSID" 0 0) || exit 1
@@ -92,6 +86,14 @@ if [ "$wifi" == "true" ]; then
   clear
   : ${wifi_password:?"Wifi password cannot be empty"}
 fi
+
+user=$(dialog --stdout --inputbox "Enter admin username" 0 0) || exit 1
+clear
+: ${user:?"user cannot be empty"}
+
+password=$(dialog --stdout --inputbox "Enter admin password (will print)" 0 0) || exit 1
+clear
+: ${password:?"password cannot be empty"}
 
 ### Set up logging ###
 exec 1> >(tee "stdout.log")
@@ -127,17 +129,24 @@ cryptsetup open $part_root cryptroot <<< "${luks_password}"
 if [ -n $ZFS ]; then
   modprobe zfs
   zpool create -f zroot /dev/disk/by-id/dm-name-cryptroot
-  zfs create -o mountpoint=none zroot/ROOT
+  zfs create -o atime=off -o compression=on -o mountpoint=none zroot/ROOT
 
-  zfs create -o compression=lz4 -o mountpoint=/ zroot/ROOT/default || true
+  zfs create -o mountpoint=/ zroot/ROOT/default || true
 
-  for path in /home /var /var/log /var/log/journal /etc /data /data /docker; do
-    zfs create -o compression=lz4 -o mountpoint=$path zroot/ROOT$path || true
+  for path in /home /tmp /var /var/log /var/log/journal /etc /data /data /docker; do
+    zfs create -o mountpoint=$path zroot/ROOT$path || true
   done
   zfs unmount -a
 
+  # Set up stuff for the /tmp dataset
+  zfs set sync=disabled zroot/ROOT/tmp
+  zfs set setuid=off zroot/ROOT/tmp
+  zfs set devices=off zroot/ROOT/tmp
+  zfs set compression=off zroot/ROOT/tmp
+
   # Set up posix ACL for the journal
   zfs set acltype=posixacl zroot/ROOT/var/log/journal
+  zfs set xattr=sa zroot/ROOT/var/log/journal
 
   echo "zroot/ROOT/default / zfs defaults,noatime 0 0" >> /etc/fstab
   zpool set bootfs=zroot/ROOT/default zroot
@@ -217,8 +226,7 @@ pacstrap /mnt \
   vim \
   networkmanager \
   openssh \
-  sudo \
-  zsh
+  sudo
 genfstab -t PARTUUID /mnt >> /mnt/etc/fstab
 
 # If running ZFS, edit the fstab and remove the zfs fs
@@ -261,12 +269,12 @@ fi
 # Install the bootloader
 arch-chroot /mnt bootctl install
 
-# Rebuild the initramfs image
-arch-chroot /mnt mkinitcpio -p linux
-
 # Enable SSH and nm
 arch-chroot /mnt systemctl enable sshd
 arch-chroot /mnt systemctl enable NetworkManager.service
+
+# Disable tmpfs for /tmp; we'll use zfs
+if [ -n $ZFS ]; then arch-chroot /mnt systemctl mask tmp.mount; fi
 
 # set up wifi
 if [ "$wifi" == "true" ]; then
@@ -338,7 +346,11 @@ arch-chroot /mnt locale-gen
 echo "LANG=en_US.UTF-8" > /mnt/etc/locale.conf
 echo "KEYMAP=dvorak" > /mnt/etc/vconsole.conf
 
-arch-chroot /mnt useradd -mU -s /usr/bin/zsh -G wheel,uucp,video,audio,storage,games,input "$user"
+# Rebuild the initramfs image, after setting languages so we pick up the right
+# keyboard layout for the console
+arch-chroot /mnt mkinitcpio -p linux
+
+arch-chroot /mnt useradd -mU -G wheel,uucp,video,audio,storage,games,input "$user"
 
 if [ -n $ZFS ]; then
 cat <<EOF >/mnt/home/$user/first-boot.sh
@@ -386,10 +398,10 @@ install the system in \$(pwd).
 EOF
 chmod +x /mnt/home/$user/first-boot.sh
 
-cat <<EOF >/mnt/home/$user/.zshrc
+cat <<EOF >>/mnt/home/$user/.bashrc
 # Run the first-boot.sh script on first boot, delete it, and clear the line from
-# zshrc
-~/first-boot.sh && rm ~/first-boot.sh && echo '' > ~/.zshrc
+# bashrc
+~/first-boot.sh && rm ~/first-boot.sh && sed -i '/first-boot/d' ~/.bashrc
 EOF
 
 # Make sure everything in the user's home directory is owned by them

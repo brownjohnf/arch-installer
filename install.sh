@@ -362,10 +362,13 @@ echo "
 
 
 !! WE WILL NOW PERFORM FIRST-BOOT CONFIGURATION OF THE ZFS SYSTEM !!
-   DO NOT SKIP THIS OR YOUR SYSTEM WILL FAIL TO BOOT AGAN
+   DO NOT SKIP THIS OR YOUR SYSTEM WILL FAIL TO BOOT AGAIN
 
 
 "
+
+# Check for internet
+ping -c 1 google.com
 
 sudo zpool set cachefile=/etc/zfs/zpool.cache zroot
 sudo systemctl enable zfs.target

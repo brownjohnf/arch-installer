@@ -14,3 +14,22 @@ you to use it without copy/pasting:
 # curl -sL https://git.io/fpl2Y | bash
 ```
 
+### Internet Connection
+
+If installing from a wifi device:
+
+nmcli radio
+WIFI-HW  WIFI     WWAN-HW  WWAN
+enabled  enabled  enabled  enabled
+# nmcli device
+DEVICE  TYPE      STATE         CONNECTION
+wlan0   wifi      disconnected  --
+eth0    ethernet  unavailable   --
+lo      loopback  unmanaged     --
+
+Then to actually connect to a wireless AP:
+
+# nmcli device wifi rescan
+# nmcli device wifi list
+# nmcli device wifi connect SSID-Name password wireless-password
+

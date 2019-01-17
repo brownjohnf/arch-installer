@@ -35,7 +35,7 @@ ls /sys/firmware/efi/efivars > /dev/null
 MIRRORLIST_URL="https://www.archlinux.org/mirrorlist/?country=US&protocol=https&use_mirror_status=on"
 
 # TODO figure out how to make this work without a custom archiso image
-# if [ -n $ZFS ]; then
+# if [ -n "$ZFS" ]; then
 # cat <<EOF >>/etc/pacman.conf
 # [archzfs]
 # Server = http://archzfs.com/\$repo/x86_64
@@ -126,7 +126,7 @@ cryptsetup -v luksFormat --type luks2 $part_root <<< "${luks_password}"
 cryptsetup open $part_root cryptroot <<< "${luks_password}"
 
 # If we're doing ZFS, we set up ZFS partitioning
-if [ -n $ZFS ]; then
+if [ -n "$ZFS" ]; then
   modprobe zfs
   zpool create -f zroot /dev/disk/by-id/dm-name-cryptroot
   zfs create -o atime=off -o compression=on -o mountpoint=none zroot/ROOT
@@ -230,7 +230,7 @@ pacstrap /mnt \
 genfstab -t PARTUUID /mnt >> /mnt/etc/fstab
 
 # If running ZFS, edit the fstab and remove the zfs fs
-if [ -n $ZFS ]; then sed -i '/zfs/d' /mnt/etc/fstab; fi
+if [ -n "$ZFS" ]; then sed -i '/zfs/d' /mnt/etc/fstab; fi
 
 # Set up the hostname and /etc/hosts
 echo $hostname > /mnt/etc/hostname
@@ -242,7 +242,7 @@ cat <<EOF > /mnt/etc/hosts
 127.0.1.1	$hostname $hostname_short
 EOF
 
-if [ -n $ZFS ]; then
+if [ -n "$ZFS" ]; then
 cat <<EOF >>/mnt/etc/pacman.conf
 [archzfs]
 Server = http://archzfs.com/\$repo/x86_64
@@ -256,7 +256,7 @@ fi
 
 # Set up the hooks correctly for allowing us to unlock the encrypted partitions
 cat /mnt/etc/mkinitcpio.conf | grep -E '^HOOKS' > original_hooks.txt
-if [ -n $ZFS ]; then
+if [ -n "$ZFS" ]; then
   sed -i \
     's/^HOOKS.*/HOOKS=(base udev keyboard keymap autodetect modconf block encrypt zfs filesystems fsck)/' \
     /mnt/etc/mkinitcpio.conf
@@ -274,7 +274,7 @@ arch-chroot /mnt systemctl enable sshd
 arch-chroot /mnt systemctl enable NetworkManager.service
 
 # Disable tmpfs for /tmp; we'll use zfs
-if [ -n $ZFS ]; then arch-chroot /mnt systemctl mask tmp.mount; fi
+if [ -n "$ZFS" ]; then arch-chroot /mnt systemctl mask tmp.mount; fi
 
 # set up wifi
 if [ "$wifi" == "true" ]; then
@@ -310,7 +310,7 @@ EOF
 
 boot_options="cryptdevice=PARTUUID=$(blkid -s PARTUUID -o value "$part_root"):cryptroot"
 
-if [ -n $ZFS ]; then
+if [ -n "$ZFS" ]; then
   boot_options="$boot_options zfs=zroot rw"
 else
   boot_options="$boot_options root=/dev/lvmroot/root rw"
@@ -352,7 +352,7 @@ arch-chroot /mnt mkinitcpio -p linux
 
 arch-chroot /mnt useradd -mU -G wheel,uucp,video,audio,storage,games,input "$user"
 
-if [ -n $ZFS ]; then
+if [ -n "$ZFS" ]; then
 cat <<EOF >/mnt/home/$user/first-boot.sh
 #!/bin/bash
 
@@ -420,7 +420,7 @@ echo "root:$password" | chpasswd --root /mnt
 # Copy this script into the new installation for reference
 cp $0 /mnt/home/$user/$(basename $0)
 
-if [ -n $ZFS ]; then
+if [ -n "$ZFS" ]; then
   umount /mnt/boot
   zfs umount -a
   zpool export zroot

@@ -350,7 +350,10 @@ echo "KEYMAP=dvorak" > /mnt/etc/vconsole.conf
 # keyboard layout for the console
 arch-chroot /mnt mkinitcpio -p linux
 
-arch-chroot /mnt useradd -mU -G wheel,uucp,video,audio,storage,games,input "$user"
+arch-chroot /mnt useradd -mU \
+  --uid 1185 \
+  -G wheel,uucp,video,audio,storage,games,input \
+  "$user"
 
 if [ -n "$ZFS" ]; then
 cat <<EOF >/mnt/home/$user/first-boot.sh

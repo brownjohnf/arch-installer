@@ -2,11 +2,6 @@
 
 # WARNING: this script will destroy data on the selected disk.
 
-# To use ZFS, you'll need to press 'e' at the live USB bootscreen and add
-# (anywhere in the line) 'cow_spacesize=1G'. This is copy-on-write storage in
-# RAM, so you can adjust as necessary, but you need to not allocate more than
-# you have available in memory.
-
 set -xeuo pipefail
 trap 's=$?; echo "$0: Error on line "$LINENO": $BASH_COMMAND"; exit $s' ERR
 
@@ -33,20 +28,6 @@ fi
 ls /sys/firmware/efi/efivars > /dev/null
 
 MIRRORLIST_URL="https://www.archlinux.org/mirrorlist/?country=US&protocol=https&use_mirror_status=on"
-
-# TODO figure out how to make this work without a custom archiso image
-# if [ -n "$ZFS" ]; then
-# cat <<EOF >>/etc/pacman.conf
-# [archzfs]
-# Server = http://archzfs.com/\$repo/x86_64
-# EOF
-#
-#   pacman-key --recv-keys F75D9D76
-#   pacman-key --lsign-key F75D9D76
-#
-#   pacman -Sy --needed --noconfirm archzfs-archiso-linux
-# else
-# fi
 
 pacman -Sy --needed --noconfirm pacman-contrib dmidecode
 
@@ -227,10 +208,12 @@ pacstrap /mnt \
   networkmanager \
   openssh \
   sudo
-genfstab -t PARTUUID /mnt >> /mnt/etc/fstab
 
-# If running ZFS, edit the fstab and remove the zfs fs
-if [ -n "$ZFS" ]; then sed -i '/zfs/d' /mnt/etc/fstab; fi
+arch-chroot /mnt curl -o /tmp/linux.tar.xz \
+  https://archive.archlinux.org/packages/l/linux/linux-5.0.1.arch1-1-x86_64.pkg.tar.xz
+arch-chroot /mnt pacman -U --noconfirm /linux.tar.xz
+
+genfstab -t PARTUUID /mnt >> /mnt/etc/fstab
 
 # Set up the hostname and /etc/hosts
 echo $hostname > /mnt/etc/hostname
@@ -272,9 +255,6 @@ arch-chroot /mnt bootctl install
 # Enable SSH and nm
 arch-chroot /mnt systemctl enable sshd
 arch-chroot /mnt systemctl enable NetworkManager.service
-
-# Disable tmpfs for /tmp; we'll use zfs
-if [ -n "$ZFS" ]; then arch-chroot /mnt systemctl mask tmp.mount; fi
 
 # set up wifi
 if [ "$wifi" == "true" ]; then
@@ -371,7 +351,7 @@ echo "
 "
 
 # Check for internet
-ping -c 1 google.com
+ping -c 1 github.com
 
 sudo zpool set cachefile=/etc/zfs/zpool.cache zroot
 sudo systemctl enable zfs.target
@@ -382,7 +362,6 @@ sudo zgenhostid \$(hostid)
 sudo mkinitcpio -p linux
 
 echo "
-
 
 WE WILL NOW SWITCH FROM zfs-linux TO zfs-dkms TO UNBLOCK KERNEL UPGRADES.
 PLEASE ALLOW zfs-linux TO BE REMOVED AND zfs-dkms INSTALLED. REBOOT AFTERWARDS.

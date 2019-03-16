@@ -114,16 +114,10 @@ if [ -n "$ZFS" ]; then
 
   zfs create -o mountpoint=/ zroot/ROOT/default || true
 
-  for path in /home /tmp /var /var/log /var/log/journal /etc /data /data /docker; do
+  for path in /home /var /var/log /var/log/journal /etc /data /data /docker; do
     zfs create -o mountpoint=$path zroot/ROOT$path || true
   done
   zfs unmount -a
-
-  # Set up stuff for the /tmp dataset
-  zfs set sync=disabled zroot/ROOT/tmp
-  zfs set setuid=off zroot/ROOT/tmp
-  zfs set devices=off zroot/ROOT/tmp
-  zfs set compression=off zroot/ROOT/tmp
 
   # Set up posix ACL for the journal
   zfs set acltype=posixacl zroot/ROOT/var/log/journal
@@ -212,8 +206,11 @@ pacstrap /mnt \
 if [ -n $LINUX_VERSION ]; then
   arch-chroot /mnt curl -o /linux.tar.xz \
     https://archive.archlinux.org/packages/l/linux/linux-${LINUX_VERSION}-x86_64.pkg.tar.xz
+  arch-chroot /mnt curl -o /linux-headers.tar.xz \
+    https://archive.archlinux.org/packages/l/linux/linux-headers-${LINUX_VERSION}-x86_64.pkg.tar.xz
   arch-chroot /mnt pacman -U --noconfirm /linux.tar.xz
-  arch-chroot /mnt rm /linux.tar.xz
+  arch-chroot /mnt pacman -U --noconfirm /linux-headers.tar.xz
+  arch-chroot /mnt rm /linux*.tar.xz
 fi
 
 genfstab -t PARTUUID /mnt >> /mnt/etc/fstab

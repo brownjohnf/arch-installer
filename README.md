@@ -48,6 +48,6 @@ Then to actually connect to a wireless AP:
 ```
 # nmcli device wifi rescan
 # nmcli device wifi list
-# nmcli device wifi connect SSID-Name password wireless-password
+# nmcli device wifi connect <ssid> password <password>
 ```
 

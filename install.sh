@@ -209,9 +209,12 @@ pacstrap /mnt \
   openssh \
   sudo
 
-arch-chroot /mnt curl -o /tmp/linux.tar.xz \
-  https://archive.archlinux.org/packages/l/linux/linux-5.0.1.arch1-1-x86_64.pkg.tar.xz
-arch-chroot /mnt pacman -U --noconfirm /linux.tar.xz
+if [ -n $LINUX_VERSION ]; then
+  arch-chroot /mnt curl -o /linux.tar.xz \
+    https://archive.archlinux.org/packages/l/linux/linux-${LINUX_VERSION}-x86_64.pkg.tar.xz
+  arch-chroot /mnt pacman -U --noconfirm /linux.tar.xz
+  arch-chroot /mnt rm /linux.tar.xz
+fi
 
 genfstab -t PARTUUID /mnt >> /mnt/etc/fstab
 

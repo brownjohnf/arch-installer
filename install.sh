@@ -255,6 +255,7 @@ arch-chroot /mnt bootctl install
 # Enable SSH and nm
 arch-chroot /mnt systemctl enable sshd
 arch-chroot /mnt systemctl enable NetworkManager.service
+arch-chroot /mnt systemctl enable systemd-timesyncd.service
 
 # set up wifi
 if [ "$wifi" == "true" ]; then

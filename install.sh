@@ -72,10 +72,6 @@ user=$(dialog --stdout --inputbox "Enter admin username" 0 0) || exit 1
 clear
 : ${user:?"user cannot be empty"}
 
-password=$(dialog --stdout --inputbox "Enter admin password (will print)" 0 0) || exit 1
-clear
-: ${password:?"password cannot be empty"}
-
 ### Set up logging ###
 exec 1> >(tee "stdout.log")
 exec 2> >(tee "stderr.log")
@@ -198,20 +194,14 @@ fi
 #are given, pacstrap defaults to the "base" group.
 pacstrap /mnt \
   base \
-  vim \
+  linux \
+  linux-firmware \
+  neovim \
   networkmanager \
   openssh \
-  sudo
-
-if [ -n $LINUX_VERSION ]; then
-  arch-chroot /mnt curl -o /linux.tar.xz \
-    https://archive.archlinux.org/packages/l/linux/linux-${LINUX_VERSION}-x86_64.pkg.tar.xz
-  arch-chroot /mnt curl -o /linux-headers.tar.xz \
-    https://archive.archlinux.org/packages/l/linux/linux-headers-${LINUX_VERSION}-x86_64.pkg.tar.xz
-  arch-chroot /mnt pacman -U --noconfirm /linux.tar.xz
-  arch-chroot /mnt pacman -U --noconfirm /linux-headers.tar.xz
-  arch-chroot /mnt rm /linux*.tar.xz
-fi
+  sudo \
+  tmux \
+  vim
 
 genfstab -t PARTUUID /mnt >> /mnt/etc/fstab
 
@@ -244,6 +234,8 @@ if [ -n "$ZFS" ]; then
     's/^HOOKS.*/HOOKS=(base udev keyboard keymap autodetect modconf block encrypt zfs filesystems fsck)/' \
     /mnt/etc/mkinitcpio.conf
 else
+  # Install lvm2 so the hooks will work
+  arch-chroot /mnt pacman -Sy --needed --noconfirm lvm2
   sed -i \
     's/^HOOKS.*/HOOKS=(base udev keyboard keymap autodetect modconf block encrypt lvm2 filesystems fsck)/' \
     /mnt/etc/mkinitcpio.conf
@@ -304,6 +296,9 @@ product_name=$(dmidecode \
   | tr -d '[:blank:]')
 
 if [ "${product_name}" == "XPS 15 9560" ]; then
+  # Install and make default a larger font
+  arch-chroot /mnt pacman -S terminus-font
+  echo ter-132n > /mnt/etc/vconsole.conf
   boot_options="${boot_options} nouveau.modeset=0 acpi_rev_override=1"
 fi
 
@@ -397,8 +392,11 @@ fi
 # Set up the wheel group to have sudo access
 echo "%wheel ALL=(ALL) ALL" >> /mnt/etc/sudoers
 
-echo "$user:$password" | chpasswd --root /mnt
-echo "root:$password" | chpasswd --root /mnt
+# Set passwords for the default admin user and root
+# TODO: Add option to generate random password for root
+for u in $user root; do
+  echo -n "$u password: "; arch-chroot /mnt passwd $u
+done
 
 # Copy this script into the new installation for reference
 cp $0 /mnt/home/$user/$(basename $0)

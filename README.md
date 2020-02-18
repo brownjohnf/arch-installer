@@ -12,7 +12,8 @@ need to set custom graphics boot options. In the case of the XPS, it
 should be `nouveau.modeset=0`.
 
 You can do this by pressing `e` at the EFI boot screen. After editing
-the startup command, press `ctrl-x` to boot the system. Once the
+the startup command, press `ENTER` (or sometimes `Ctl-x`) to boot the
+system. Once the
 installation is complete, you'll need to modify the options to set it
 permanently.
 

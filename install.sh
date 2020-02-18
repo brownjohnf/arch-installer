@@ -295,10 +295,11 @@ product_name=$(dmidecode \
   | cut -d : -f 2 \
   | tr -d '[:blank:]')
 
-if [ "${product_name}" == "XPS 15 9560" ]; then
+# TODO: Use regex here instead of all the grepping and cutting.
+if [ "${product_name}" == "XPS159560" ]; then
   # Install and make default a larger font
-  arch-chroot /mnt pacman -S terminus-font
-  echo ter-132n > /mnt/etc/vconsole.conf
+  arch-chroot /mnt pacman -Sy --needed --noconfirm terminus-font
+  echo FONT=ter-132n >> /mnt/etc/vconsole.conf
   boot_options="${boot_options} nouveau.modeset=0 acpi_rev_override=1"
 fi
 
@@ -320,7 +321,7 @@ arch-chroot /mnt hwclock --systohc
 echo "en_US.UTF-8 UTF-8" > /mnt/etc/locale.gen
 arch-chroot /mnt locale-gen
 echo "LANG=en_US.UTF-8" > /mnt/etc/locale.conf
-echo "KEYMAP=dvorak" > /mnt/etc/vconsole.conf
+echo "KEYMAP=dvorak" >> /mnt/etc/vconsole.conf
 
 # Rebuild the initramfs image, after setting languages so we pick up the right
 # keyboard layout for the console

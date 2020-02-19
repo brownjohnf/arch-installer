@@ -8,8 +8,7 @@ trap 's=$?; echo "$0: Error on line "$LINENO": $BASH_COMMAND"; exit $s' ERR
 CLEAN=${CLEAN:-''}
 ZFS=${ZFS:-''}
 
-# If CLEAN is set, clean up any broken state we may have lying around
-if [ -n $CLEAN ]; then
+function clean() {
   umount /mnt/boot || true
   umount /mnt/var || true
   umount /mnt/home || true
@@ -22,6 +21,11 @@ if [ -n $CLEAN ]; then
   zpool destroy zroot || true
 
   cryptsetup close /dev/mapper/cryptroot || true
+}
+
+# If CLEAN is set, clean up any broken state we may have lying around
+if [ -n "$CLEAN" ]; then
+  clean
 fi
 
 # Ensure we've got the system booted in EFI
@@ -32,7 +36,7 @@ MIRRORLIST_URL="https://www.archlinux.org/mirrorlist/?country=US&protocol=https&
 pacman -Sy --needed --noconfirm pacman-contrib dmidecode
 
 # Only rank the mirrors if we're not cleaning up, indicating this is a fresh run
-if [ -z $CLEAN ]; then
+if [ -z "$CLEAN" ]; then
   echo "Updating mirror list"
   curl -s "$MIRRORLIST_URL" | \
       sed -e 's/^#Server/Server/' -e '/^#/d' | \
@@ -88,19 +92,19 @@ parted --script "${device}" -- \
 
 # Simple globbing was not enough as on one device I needed to match /dev/mmcblk0p1
 # but not /dev/mmcblk0boot1 while being able to match /dev/sda1 on other devices.
-part_boot="$(ls ${device}* | grep -E "^${device}p?1$")"
-part_root="$(ls ${device}* | grep -E "^${device}p?3$")"
+part_boot="$(ls "${device}*" | grep -E "^${device}p?1$")"
+part_root="$(ls "${device}*" | grep -E "^${device}p?3$")"
 
 # Wipe any old fs stuff from the new partitions
 wipefs "${part_boot}"
 wipefs "${part_root}"
-dd if=/dev/urandom of=$part_root bs=512 count=20480
+dd if=/dev/urandom of="$part_root" bs=512 count=20480
 
 # Set up the EFI partition
 mkfs.vfat -F32 "${part_boot}"
 
-cryptsetup -v luksFormat --type luks2 $part_root <<< "${luks_password}"
-cryptsetup open $part_root cryptroot <<< "${luks_password}"
+cryptsetup -v luksFormat --type luks2 "$part_root" <<< "${luks_password}"
+cryptsetup open "$part_root" cryptroot <<< "${luks_password}"
 
 # If we're doing ZFS, we set up ZFS partitioning
 if [ -n "$ZFS" ]; then
@@ -127,13 +131,13 @@ if [ -n "$ZFS" ]; then
   mkdir -p /mnt/etc/zfs
   cp /etc/zfs/zpool.cache /mnt/etc/zfs/zpool.cache
   mkdir -p /mnt/boot
-  mount $part_boot /mnt/boot
+  mount "$part_boot" /mnt/boot
 else
   # If we're doing LVM, then we'll set up LVM partitions
   pvcreate /dev/mapper/cryptroot
   vgcreate lvmroot /dev/mapper/cryptroot
   # If the root partition is less than 10G, make a 3G root partition
-  if [ $(lsblk -o SIZE --noheadings --nodeps -b $part_root) -lt 10000000000 ]; then
+  if [ "$(lsblk -o SIZE --noheadings --nodeps -b "$part_root")" -lt 10000000000 ]; then
     lvcreate -L 3GB lvmroot -n root
   else
     lvcreate -l 15%VG lvmroot -n root
@@ -172,7 +176,7 @@ else
   vgchange -a n lvmroot
 
   cryptsetup close cryptroot
-  cryptsetup open $part_root cryptroot <<< "${luks_password}"
+  cryptsetup open "$part_root" cryptroot <<< "${luks_password}"
 
   mount_all
 fi
@@ -206,8 +210,8 @@ pacstrap /mnt \
 genfstab -t PARTUUID /mnt >> /mnt/etc/fstab
 
 # Set up the hostname and /etc/hosts
-echo $hostname > /mnt/etc/hostname
-hostname_short=$(echo $hostname | cut -d '.' -f 1)
+echo "$hostname" > /mnt/etc/hostname
+hostname_short="$(echo "$hostname" | cut -d '.' -f 1)"
 cat <<EOF > /mnt/etc/hosts
 127.0.0.1 localhost
 ::1       localhost
@@ -218,7 +222,7 @@ EOF
 if [ -n "$ZFS" ]; then
 cat <<EOF >>/mnt/etc/pacman.conf
 [archzfs]
-Server = http://archzfs.com/\$repo/x86_64
+Server = https://archzfs.com/\$repo/x86_64
 EOF
 
   arch-chroot /mnt pacman-key --recv-keys F75D9D76
@@ -228,7 +232,7 @@ EOF
 fi
 
 # Set up the hooks correctly for allowing us to unlock the encrypted partitions
-cat /mnt/etc/mkinitcpio.conf | grep -E '^HOOKS' > original_hooks.txt
+grep -E '^HOOKS' "/mnt/etc/mkinitcpio.conf" > original_hooks.txt
 if [ -n "$ZFS" ]; then
   sed -i \
     's/^HOOKS.*/HOOKS=(base udev keyboard keymap autodetect modconf block encrypt zfs filesystems fsck)/' \
@@ -251,7 +255,7 @@ arch-chroot /mnt systemctl enable systemd-timesyncd.service
 
 # set up wifi
 if [ "$wifi" == "true" ]; then
-cat <<EOF > /mnt/etc/NetworkManager/system-connections/$wifi_ssid.nmconnection
+cat <<EOF > "/mnt/etc/NetworkManager/system-connections/$wifi_ssid.nmconnection"
 [connection]
 id=$wifi_ssid
 type=wifi
@@ -295,6 +299,10 @@ product_name=$(dmidecode \
   | cut -d : -f 2 \
   | tr -d '[:blank:]')
 
+# Truncate the vconsole file, since we'll append to it below, and don't want to
+# duplicate contents on subsequent runs of the script.
+truncate --size 0 /mnt/etc/vconsole.conf
+
 # TODO: Use regex here instead of all the grepping and cutting.
 if [ "${product_name}" == "XPS159560" ]; then
   # Install and make default a larger font
@@ -333,7 +341,7 @@ arch-chroot /mnt useradd -mU \
   "$user"
 
 if [ -n "$ZFS" ]; then
-cat <<EOF >/mnt/home/$user/first-boot.sh
+cat <<EOF > "/mnt/home/$user/first-boot.sh"
 #!/bin/bash
 
 set -euo pipefail
@@ -360,16 +368,6 @@ sudo mkinitcpio -p linux
 
 echo "
 
-WE WILL NOW SWITCH FROM zfs-linux TO zfs-dkms TO UNBLOCK KERNEL UPGRADES.
-PLEASE ALLOW zfs-linux TO BE REMOVED AND zfs-dkms INSTALLED. REBOOT AFTERWARDS.
-
-
-"
-
-sudo pacman -Syu zfs-dkms
-
-echo "
-
 
 First run configuration has been completed. It's suggested that you restart
 before proceeding to do anything else. You can find the script that was used to
@@ -378,16 +376,16 @@ install the system in \$(pwd).
 "
 
 EOF
-chmod +x /mnt/home/$user/first-boot.sh
+chmod +x "/mnt/home/$user/first-boot.sh"
 
-cat <<EOF >>/mnt/home/$user/.bashrc
+cat <<EOF >> "/mnt/home/$user/.bashrc"
 # Run the first-boot.sh script on first boot, delete it, and clear the line from
 # bashrc
 ~/first-boot.sh && rm ~/first-boot.sh && sed -i '/first-boot/d' ~/.bashrc
 EOF
 
 # Make sure everything in the user's home directory is owned by them
-arch-chroot /mnt chown -R $user: /home/$user
+arch-chroot /mnt chown -R "$user:" "/home/$user"
 fi
 
 # Set up the wheel group to have sudo access
@@ -396,11 +394,11 @@ echo "%wheel ALL=(ALL) ALL" >> /mnt/etc/sudoers
 # Set passwords for the default admin user and root
 # TODO: Add option to generate random password for root
 for u in $user root; do
-  echo -n "$u password: "; arch-chroot /mnt passwd $u
+  echo -n "$u password: "; arch-chroot /mnt passwd "$u"
 done
 
 # Copy this script into the new installation for reference
-cp $0 /mnt/home/$user/$(basename $0)
+cp "$0" /mnt/home/$user/$(basename "$0")
 
 if [ -n "$ZFS" ]; then
   umount /mnt/boot

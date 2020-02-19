@@ -26,7 +26,7 @@ you to use it without copy/pasting:
 # curl -sL https://git.io/fpl2Y | bash
 ```
 
-### Internet Connection
+### Internet Connection, NetworkManager
 
 If installing from a wifi device, start NetworkManager, and then connect
 to the wifi network:
@@ -50,5 +50,19 @@ Then to actually connect to a wireless AP:
 # nmcli device wifi rescan
 # nmcli device wifi list
 # nmcli device wifi connect <ssid> password <password>
+```
+
+### Network Connection, netctl
+
+If using a vanilla archiso, NetworkManager won't be installed.
+
+``` sh
+# Interactively select a wifi network and connect. This can take some time; 
+# just be patient and it will work.
+wifi-menu
+```
+
+```
+
 ```
 

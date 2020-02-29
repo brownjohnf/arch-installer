@@ -45,7 +45,7 @@ fi
 
 ### Get infomation from user ###
 devicelist=$(lsblk -dplnx size -o name,size | grep -Ev "boot|rpmb|loop" | tac)
-device=$(dialog --stdout --menu "Select installtion disk" 0 0 0 ${devicelist}) || exit 1
+device=$(dialog --stdout --menu "Select installation disk" 0 0 0 ${devicelist}) || exit 1
 clear
 
 luks_password=$(dialog --stdout --inputbox "Enter LUKS password (will print)" 0 0) || exit 1
@@ -83,17 +83,19 @@ exec 2> >(tee "stderr.log")
 timedatectl set-ntp true
 
 ### Setup the disk and partitions ###
+### Make sure we provide enough room on boot for multiple kernels.
+### We also create a 2G partition for encrypted secrets storage.
 parted --script "${device}" -- \
   mklabel gpt \
-  mkpart ESP fat32 1Mib 512MiB \
+  mkpart ESP fat32 1Mib 2GiB \
   set 1 boot on \
-  mkpart primary ext4 512Mib 2048MiB \
-  mkpart primary ext4 2048MiB 100%
+  mkpart primary ext4 2GiB 4GiB \
+  mkpart primary ext4 4GiB 100%
 
 # Simple globbing was not enough as on one device I needed to match /dev/mmcblk0p1
 # but not /dev/mmcblk0boot1 while being able to match /dev/sda1 on other devices.
-part_boot="$(ls "${device}*" | grep -E "^${device}p?1$")"
-part_root="$(ls "${device}*" | grep -E "^${device}p?3$")"
+part_boot="$(ls ${device}* | grep -E "^${device}p?1$")"
+part_root="$(ls ${device}* | grep -E "^${device}p?3$")"
 
 # Wipe any old fs stuff from the new partitions
 wipefs "${part_boot}"
@@ -200,6 +202,8 @@ pacstrap /mnt \
   base \
   linux \
   linux-firmware \
+  linux-headers-lts \
+  linux-lts \
   neovim \
   networkmanager \
   openssh \
@@ -219,21 +223,18 @@ cat <<EOF > /mnt/etc/hosts
 127.0.1.1	$hostname $hostname_short
 EOF
 
+# Set up the hooks correctly for allowing us to unlock the encrypted partitions
+grep -E '^HOOKS' "/mnt/etc/mkinitcpio.conf" > original_hooks.txt
 if [ -n "$ZFS" ]; then
-cat <<EOF >>/mnt/etc/pacman.conf
+  cat <<EOF >>/mnt/etc/pacman.conf
 [archzfs]
 Server = https://archzfs.com/\$repo/x86_64
 EOF
 
   arch-chroot /mnt pacman-key --recv-keys F75D9D76
   arch-chroot /mnt pacman-key --lsign-key F75D9D76
+  arch-chroot /mnt pacman -Sy --needed --noconfirm zfs-linux-lts
 
-  arch-chroot /mnt pacman -Sy --needed --noconfirm zfs-linux
-fi
-
-# Set up the hooks correctly for allowing us to unlock the encrypted partitions
-grep -E '^HOOKS' "/mnt/etc/mkinitcpio.conf" > original_hooks.txt
-if [ -n "$ZFS" ]; then
   sed -i \
     's/^HOOKS.*/HOOKS=(base udev keyboard keymap autodetect modconf block encrypt zfs filesystems fsck)/' \
     /mnt/etc/mkinitcpio.conf
@@ -311,11 +312,20 @@ if [ "${product_name}" == "XPS159560" ]; then
   boot_options="${boot_options} nouveau.modeset=0 acpi_rev_override=1"
 fi
 
-# write the bootloader entry
+# Write bootloader entries for the standard kernel that (currently) won't work
+# with ZFS and also the LTS kernel, which can be used for fallback (or only,
+# currently)
 cat <<EOF > /mnt/boot/loader/entries/arch.conf
 title    Arch Linux
 linux    /vmlinuz-linux
 initrd   /initramfs-linux.img
+options  $boot_options
+EOF
+
+cat <<EOF > /mnt/boot/loader/entries/arch-lts.conf
+title    Arch Linux LTS
+linux    /vmlinuz-linux-lts
+initrd   /initramfs-linux-lts.img
 options  $boot_options
 EOF
 
@@ -331,9 +341,10 @@ arch-chroot /mnt locale-gen
 echo "LANG=en_US.UTF-8" > /mnt/etc/locale.conf
 echo "KEYMAP=dvorak" >> /mnt/etc/vconsole.conf
 
-# Rebuild the initramfs image, after setting languages so we pick up the right
+# Rebuild the initramfs images, after setting languages so we pick up the right
 # keyboard layout for the console
 arch-chroot /mnt mkinitcpio -p linux
+arch-chroot /mnt mkinitcpio -p linux-lts
 
 arch-chroot /mnt useradd -mU \
   --uid 1185 \

@@ -110,15 +110,23 @@ cryptsetup open "$part_root" cryptroot <<< "${luks_password}"
 
 # If we're doing ZFS, we set up ZFS partitioning
 if [ -n "$ZFS" ]; then
+  # Ensure the module's loaded
   modprobe zfs
-  zpool create -f zroot /dev/disk/by-id/dm-name-cryptroot
-  zfs create -o atime=off -o compression=on -o mountpoint=none zroot/ROOT
 
+  # Create a pool made up of the drive
+  zpool create -f zroot /dev/disk/by-id/dm-name-cryptroot
+
+  # Create the root, with default attributes
+  zfs create -o atime=off -o compression=on -o mountpoint=none zroot/ROOT
+  # Create /
   zfs create -o mountpoint=/ zroot/ROOT/default || true
 
+  # Create datasets for all the other partitions we want to isolate, setting
+  # their mountpoint
   for path in /home /var /var/log /var/log/journal /etc /data /data /docker; do
     zfs create -o mountpoint=$path zroot/ROOT$path || true
   done
+  # Unmount everything for now
   zfs unmount -a
 
   # Set up posix ACL for the journal
@@ -128,6 +136,8 @@ if [ -n "$ZFS" ]; then
   echo "zroot/ROOT/default / zfs defaults,noatime 0 0" >> /etc/fstab
   zpool set bootfs=zroot/ROOT/default zroot
   zpool export zroot
+
+  # import the pool by id, to ensure get consistent mounting
   zpool import -d /dev/disk/by-id -R /mnt zroot
   zpool set cachefile=/etc/zfs/zpool.cache zroot
   mkdir -p /mnt/etc/zfs
@@ -202,7 +212,7 @@ pacstrap /mnt \
   base \
   linux \
   linux-firmware \
-  linux-headers-lts \
+  linux-lts-headers \
   linux-lts \
   neovim \
   networkmanager \

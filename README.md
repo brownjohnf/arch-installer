@@ -57,7 +57,7 @@ Then to actually connect to a wireless AP:
 If using a vanilla archiso, NetworkManager won't be installed.
 
 ``` sh
-# Interactively select a wifi network and connect. This can take some time; 
+# Interactively select a wifi network and connect. This can take some time;
 # just be patient and it will work.
 wifi-menu
 ```
@@ -66,3 +66,9 @@ wifi-menu
 
 ```
 
+### Options
+
+* `CLEAN=1`: Unmount any mounted partitions, volume groups, crypt mounts, etc.
+* `ZFS=1`: Install on encrypted ZFS instead of LVM
+
+You'll be prompted for things like encryption passwords, etc.

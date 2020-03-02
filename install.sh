@@ -11,8 +11,6 @@ function clean() {
   umount /mnt/boot || true
   zfs umount -a || true
   zpool destroy zroot || true
-
-  cryptsetup close /dev/mapper/cryptroot || true
 }
 
 # If CLEAN is set, clean up any broken state we may have lying around
@@ -68,27 +66,26 @@ dd if=/dev/urandom of="$part_root" bs=512 count=20480
 # Set up the EFI partition
 mkfs.vfat -F32 "${part_boot}"
 
-# Setup the full disk encryption
-# TODO: replace this with native ZFS encryption
-luks_password=$(dialog --stdout --inputbox "Enter LUKS password (will print)" 0 0) || exit 1
-clear
-: ${luks_password:?"luks_password cannot be empty"}
-
-cryptsetup -v luksFormat --type luks2 "$part_root" <<< "${luks_password}"
-cryptsetup open "$part_root" cryptroot <<< "${luks_password}"
-
 # Set up ZFS partitioning
 # Ensure the module's loaded
 modprobe zfs
 
 # Create a pool made up of the drive
-zpool create -f zroot -m none /dev/disk/by-id/dm-name-cryptroot
+zpool create -f zroot -m none "$part_root"
 
 # Create the root, with default attributes and no mountpoint
-zfs create -o atime=off -o compression=on -o mountpoint=none zroot/ROOT
+zfs create \
+  -o atime=off \
+  -o compression=on \
+  -o mountpoint=none \
+  zroot/ROOT
 
 # Create / (|| true because it will fail to mount)
-zfs create -o mountpoint=/ zroot/ROOT/default || true
+zfs create \
+  -o mountpoint=/ \
+  -o encryption=on \
+  -o keyformat=passphrase \
+  zroot/ROOT/default || true
 
 # Create datasets for all the other partitions we want to isolate, setting
 # their mountpoint (|| true because it will fail to mount)
@@ -106,7 +103,7 @@ zpool set bootfs=zroot/ROOT/default zroot
 zpool export zroot
 
 # import the pool by id, to ensure get consistent mounting
-zpool import -d /dev/disk/by-id -R /mnt zroot
+zpool import -l -d /dev/disk/by-id -R /mnt zroot
 zpool set cachefile=/etc/zfs/zpool.cache zroot
 mkdir -p /mnt/etc/zfs
 cp /etc/zfs/zpool.cache /mnt/etc/zfs/zpool.cache

@@ -130,6 +130,7 @@ mount "$part_boot" /mnt/boot
 # are given, pacstrap defaults to the "base" group.
 pacstrap /mnt \
   base \
+  git \
   linux \
   linux-firmware \
   linux-headers \
@@ -139,8 +140,7 @@ pacstrap /mnt \
   networkmanager \
   openssh \
   sudo \
-  tmux \
-  vim
+  tmux 
 
 # Generate an fstab and put it in the chroot environment. We only want the boot
 # partition in it; the rest gets handled by ZFS

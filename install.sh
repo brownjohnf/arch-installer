@@ -82,15 +82,16 @@ cryptsetup open "$part_root" cryptroot <<< "${luks_password}"
 modprobe zfs
 
 # Create a pool made up of the drive
-zpool create -f zroot /dev/disk/by-id/dm-name-cryptroot
+zpool create -f zroot -m none /dev/disk/by-id/dm-name-cryptroot
 
-# Create the root, with default attributes
+# Create the root, with default attributes and no mountpoint
 zfs create -o atime=off -o compression=on -o mountpoint=none zroot/ROOT
-# Create /
+
+# Create / (|| true because it will fail to mount)
 zfs create -o mountpoint=/ zroot/ROOT/default || true
 
 # Create datasets for all the other partitions we want to isolate, setting
-# their mountpoint
+# their mountpoint (|| true because it will fail to mount)
 for path in /home /var /var/log /var/log/journal /etc /data /data /docker; do
   zfs create -o mountpoint=$path zroot/ROOT$path || true
 done
@@ -101,7 +102,6 @@ zfs unmount -a
 zfs set acltype=posixacl zroot/ROOT/var/log/journal
 zfs set xattr=sa zroot/ROOT/var/log/journal
 
-echo "zroot/ROOT/default / zfs defaults,noatime 0 0" >> /etc/fstab
 zpool set bootfs=zroot/ROOT/default zroot
 zpool export zroot
 
@@ -113,21 +113,21 @@ cp /etc/zfs/zpool.cache /mnt/etc/zfs/zpool.cache
 mkdir -p /mnt/boot
 mount "$part_boot" /mnt/boot
 
-### Install and configure the basic system ###
+### Install and configure the base system ###
 
-#usage: pacstrap [options] root [packages...]
+# usage: pacstrap [options] root [packages...]
 #
-#  Options:
-#    -C config      Use an alternate config file for pacman
-#    -c             Use the package cache on the host, rather than the target
-#    -G             Avoid copying the host's pacman keyring to the target
-#    -i             Prompt for package confirmation when needed
-#    -M             Avoid copying the host's mirrorlist to the target
+#   Options:
+#     -C config      Use an alternate config file for pacman
+#     -c             Use the package cache on the host, rather than the target
+#     -G             Avoid copying the host's pacman keyring to the target
+#     -i             Prompt for package confirmation when needed
+#     -M             Avoid copying the host's mirrorlist to the target
 #
-#    -h             Print this help message
+#     -h             Print this help message
 #
-#pacstrap installs packages to the specified new root directory. If no packages
-#are given, pacstrap defaults to the "base" group.
+# pacstrap installs packages to the specified new root directory. If no packages
+# are given, pacstrap defaults to the "base" group.
 pacstrap /mnt \
   base \
   linux \
@@ -142,7 +142,9 @@ pacstrap /mnt \
   tmux \
   vim
 
-genfstab -t PARTUUID /mnt >> /mnt/etc/fstab
+# Generate an fstab and put it in the chroot environment. We only want the boot
+# partition in it; the rest gets handled by ZFS
+genfstab -t PARTUUID /mnt | grep -A 1 "$part_boot" > /mnt/etc/fstab
 
 # Set up the hostname and /etc/hosts
 function set_hostname() {
@@ -154,13 +156,37 @@ function set_hostname() {
 
   hostname_short="$(echo "$hostname" | cut -d '.' -f 1)"
   cat <<EOF > /mnt/etc/hosts
-  127.0.0.1 localhost
-  ::1       localhost
-  ::1       $hostname $hostname_short
-  127.0.1.1	$hostname $hostname_short
-  EOF
+127.0.0.1 localhost
+::1       localhost
+::1       $hostname $hostname_short
+127.0.1.1	$hostname $hostname_short
+EOF
 }
 set_hostname
+
+# Set the timezone
+arch-chroot /mnt ln -sf /usr/share/zoneinfo/America/Los_Angeles /etc/localtime
+
+# Sync time
+arch-chroot /mnt hwclock --systohc
+
+# Truncate the vconsole file, since we'll append to it below, and don't want to
+# duplicate contents on subsequent runs of the script.
+truncate --size 0 /mnt/etc/vconsole.conf
+
+# Set up tho locale. Setting this before installing the zfs modules means that
+# the language setting should get picked up and be set correctly in the ramdisk.
+echo "en_US.UTF-8 UTF-8" > /mnt/etc/locale.gen
+arch-chroot /mnt locale-gen
+echo "LANG=en_US.UTF-8" > /mnt/etc/locale.conf
+echo "KEYMAP=dvorak" >> /mnt/etc/vconsole.conf
+
+# Set up the hooks correctly for allowing us to unlock the encrypted partitions.
+# Doing this here _should_ mean that when we install the zfs- modules below, the
+# kernels' ramdisks etc. should pick it up.
+sed -i \
+  's/^HOOKS.*/HOOKS=(base udev keyboard keymap autodetect modconf block encrypt zfs filesystems)/' \
+  /mnt/etc/mkinitcpio.conf
 
 # Install zfs modules
 cat <<EOF >>/mnt/etc/pacman.conf
@@ -171,11 +197,6 @@ EOF
 arch-chroot /mnt pacman-key --recv-keys F75D9D76
 arch-chroot /mnt pacman-key --lsign-key F75D9D76
 arch-chroot /mnt pacman -Sy --needed --noconfirm zfs-linux zfs-linux-lts
-
-# Set up the hooks correctly for allowing us to unlock the encrypted partitions
-sed -i \
-  's/^HOOKS.*/HOOKS=(base udev keyboard keymap autodetect modconf block encrypt zfs filesystems)/' \
-  /mnt/etc/mkinitcpio.conf
 
 # Install the bootloader
 arch-chroot /mnt bootctl install
@@ -233,10 +254,6 @@ EOF
 
 boot_options="cryptdevice=PARTUUID=$(blkid -s PARTUUID -o value "$part_root"):cryptroot zfs=zroot rw"
 
-# Truncate the vconsole file, since we'll append to it below, and don't want to
-# duplicate contents on subsequent runs of the script.
-truncate --size 0 /mnt/etc/vconsole.conf
-
 product_name=$(dmidecode \
   | grep -A 3 'System Information' \
   | grep 'Product Name' \
@@ -268,22 +285,10 @@ initrd   /initramfs-linux-lts.img
 options  $boot_options
 EOF
 
-# Set the timezone
-arch-chroot /mnt ln -sf /usr/share/zoneinfo/America/Los_Angeles /etc/localtime
-
-# Sync time
-arch-chroot /mnt hwclock --systohc
-
-# Set up tho locale
-echo "en_US.UTF-8 UTF-8" > /mnt/etc/locale.gen
-arch-chroot /mnt locale-gen
-echo "LANG=en_US.UTF-8" > /mnt/etc/locale.conf
-echo "KEYMAP=dvorak" >> /mnt/etc/vconsole.conf
-
 # Rebuild the initramfs images, after setting languages so we pick up the right
 # keyboard layout for the console
-arch-chroot /mnt mkinitcpio -p linux
-arch-chroot /mnt mkinitcpio -p linux-lts
+# arch-chroot /mnt mkinitcpio -p linux
+# arch-chroot /mnt mkinitcpio -p linux-lts
 
 # figure out which user we want to use
 user=$(dialog --stdout --inputbox "Enter admin username" 0 0) || exit 1
@@ -319,6 +324,7 @@ sudo systemctl enable zfs-mount
 sudo systemctl enable zfs-import.target
 sudo zgenhostid \$(hostid)
 sudo mkinitcpio -p linux
+sudo mkinitcpio -p linux-lts
 
 echo "
 
@@ -365,5 +371,5 @@ cat <<EOF
 Installation complete!
 
 You may now reboot, or enter the installed environment
-via `arch-chroot /mnt`.
+via \`arch-chroot /mnt\`.
 EOF

@@ -95,7 +95,7 @@ zfs unmount -a
 zfs set acltype=posixacl zroot/ROOT/var/log/journal
 zfs set xattr=sa zroot/ROOT/var/log/journal
 
-zpool set bootfs=zroot/ROOT/default zroot
+zpool set bootfs=zroot/ROOT zroot
 zpool export zroot
 
 # import the pool by id, to ensure get consistent mounting

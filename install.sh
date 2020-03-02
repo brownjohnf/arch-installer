@@ -73,19 +73,15 @@ modprobe zfs
 # Create a pool made up of the drive
 zpool create -f zroot -m none "$part_root"
 
-# Create the root, with default attributes and no mountpoint
+# Create the root (/), with default attributes (|| true because it will fail to
+# mount)
 zfs create \
   -o atime=off \
   -o compression=on \
-  -o mountpoint=none \
-  zroot/ROOT
-
-# Create / (|| true because it will fail to mount)
-zfs create \
   -o mountpoint=/ \
   -o encryption=on \
   -o keyformat=passphrase \
-  zroot/ROOT/default || true
+  zroot/ROOT || true
 
 # Create datasets for all the other partitions we want to isolate, setting
 # their mountpoint (|| true because it will fail to mount)
@@ -205,6 +201,7 @@ arch-chroot /mnt systemctl enable systemd-timesyncd.service
 
 # set up wifi
 wifi=false
+clear
 if dialog --yesno "Configure wifi for target system?" 0 0; then
   wifi=true
 fi
@@ -249,7 +246,7 @@ default arch
 timeout 3
 EOF
 
-boot_options="cryptdevice=PARTUUID=$(blkid -s PARTUUID -o value "$part_root"):cryptroot zfs=zroot rw"
+boot_options="zfs=zroot rw"
 
 product_name=$(dmidecode \
   | grep -A 3 'System Information' \

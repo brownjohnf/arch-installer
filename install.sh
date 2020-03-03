@@ -21,6 +21,9 @@ fi
 # Ensure we've got the system booted in EFI
 ls /sys/firmware/efi/efivars > /dev/null
 
+# Ensure we have the zfs module
+modprobe zfs
+
 MIRRORLIST_URL="https://www.archlinux.org/mirrorlist/?country=US&protocol=https&use_mirror_status=on"
 
 pacman -Sy --needed --noconfirm pacman-contrib dmidecode
@@ -37,11 +40,11 @@ fi
 exec 1> >(tee "stdout.log")
 exec 2> >(tee "stderr.log")
 
+# Set the time from NTP
 timedatectl set-ntp true
 
 ### Setup the disk and partitions ###
 ### Make sure we provide enough room on boot for multiple kernels.
-### We also create a 2G partition for encrypted secrets storage.
 devicelist=$(lsblk -dplnx size -o name,size | grep -Ev "boot|rpmb|loop" | tac)
 device=$(dialog --stdout --menu "Select installation disk" 0 0 0 ${devicelist}) || exit 1
 clear
@@ -50,31 +53,31 @@ parted --script "${device}" -- \
   mklabel gpt \
   mkpart ESP fat32 1Mib 2GiB \
   set 1 boot on \
-  mkpart primary ext4 2GiB 4GiB \
-  mkpart primary ext4 4GiB 100%
+  mkpart primary ext4 2GiB 100%
 
 # Simple globbing was not enough as on one device I needed to match /dev/mmcblk0p1
 # but not /dev/mmcblk0boot1 while being able to match /dev/sda1 on other devices.
-part_boot="$(ls ${device}* | grep -E "^${device}p?1$")"
-part_root="$(ls ${device}* | grep -E "^${device}p?3$")"
+part_boot="$(ls "${device}"* | grep -E "^${device}p?1$")"
+part_root="$(ls "${device}"* | grep -E "^${device}p?2$")"
 
 # Wipe any old fs stuff from the new partitions
 wipefs "${part_boot}"
 wipefs "${part_root}"
+# Write some random data to the beginning of the partitions to guarantee we
+# don't confuse anything later
 dd if=/dev/urandom of="$part_root" bs=512 count=20480
 
 # Set up the EFI partition
 mkfs.vfat -F32 "${part_boot}"
 
 # Set up ZFS partitioning
-# Ensure the module's loaded
-modprobe zfs
-
 # Create a pool made up of the drive
 zpool create -f zroot -m none "$part_root"
 
 # Create the root (/), with default attributes (|| true because it will fail to
 # mount)
+# TODO: Figure out a better way to recover from the mount failure. Catching any
+# error is not a good idea.
 zfs create \
   -o atime=off \
   -o compression=on \
@@ -85,9 +88,21 @@ zfs create \
 
 # Create datasets for all the other partitions we want to isolate, setting
 # their mountpoint (|| true because it will fail to mount)
+# TODO: Figure out a better way to recover from the mount failure. Catching any
+# error is not a good idea.
 for path in /home /var /var/log /var/log/journal /etc /data /data /docker; do
   zfs create -o mountpoint=$path zroot/ROOT$path || true
 done
+
+# Create an encrypted partition which won't auto-mount where we can store
+# secrets that we want manually locked/unlocked.
+zfs create \
+  -o mountpoint=/mnt/pw \
+  -o canmount=noauto \
+  -o encryption=on \
+  -o keyformat=passphrase \
+  zroot/pw
+
 # Unmount everything for now
 zfs unmount -a
 
@@ -98,11 +113,14 @@ zfs set xattr=sa zroot/ROOT/var/log/journal
 zpool set bootfs=zroot/ROOT zroot
 zpool export zroot
 
-# import the pool by id, to ensure get consistent mounting
+# Import the pool by id, to ensure we get consistent mounting
 zpool import -l -d /dev/disk/by-id -R /mnt zroot
+# Set the cachefile for the pool, and then copy it over to the chroot fs
 zpool set cachefile=/etc/zfs/zpool.cache zroot
 mkdir -p /mnt/etc/zfs
 cp /etc/zfs/zpool.cache /mnt/etc/zfs/zpool.cache
+
+# Make a /boot directory and mount our EFI boot partition there
 mkdir -p /mnt/boot
 mount "$part_boot" /mnt/boot
 
@@ -133,7 +151,7 @@ pacstrap /mnt \
   networkmanager \
   openssh \
   sudo \
-  tmux 
+  tmux
 
 # Generate an fstab and put it in the chroot environment. We only want the boot
 # partition in it; the rest gets handled by ZFS
@@ -199,15 +217,8 @@ arch-chroot /mnt systemctl enable sshd
 arch-chroot /mnt systemctl enable NetworkManager.service
 arch-chroot /mnt systemctl enable systemd-timesyncd.service
 
-# set up wifi
-wifi=false
-clear
+# Set up wifi
 if dialog --yesno "Configure wifi for target system?" 0 0; then
-  wifi=true
-fi
-clear
-
-if [ "$wifi" == "true" ]; then
   wifi_ssid=$(dialog --stdout --inputbox "Enter wifi SSID" 0 0) || exit 1
   clear
   : ${wifi_ssid:?"Wifi SSID cannot be empty"}
@@ -241,13 +252,13 @@ method=auto
 EOF
 fi
 
-cat <<EOF > /mnt/boot/loader/loader.conf
-default arch
-timeout 3
-EOF
-
+# Set default boot options, which are pretty straightforward. This will attempt
+# to mount the root fs from the zroot pool, and will prompt for encryption
+# passwords as though you'd invoked 'zpool import -l zroot'.
 boot_options="zfs=zroot rw"
 
+# Figure out what system we're installing on, in case we need to make any
+# customization to the boot options.
 product_name=$(dmidecode \
   | grep -A 3 'System Information' \
   | grep 'Product Name' \
@@ -256,15 +267,18 @@ product_name=$(dmidecode \
 
 # TODO: Use regex here instead of all the grepping and cutting.
 if [ "${product_name}" == "XPS159560" ]; then
-  # Install and make default a larger font
+  # The XPS 15 9560 has a hi-res display with a discrete graphics card, so we'll
+  # install and make default a larger font
   arch-chroot /mnt pacman -Sy --needed --noconfirm terminus-font
   echo FONT=ter-132n >> /mnt/etc/vconsole.conf
+
+  # We also need to set the following options to avoid hanging at some point
+  # after boot.
   boot_options="${boot_options} nouveau.modeset=0 acpi_rev_override=1"
 fi
 
-# Write bootloader entries for the standard kernel that (currently) won't work
-# with ZFS and also the LTS kernel, which can be used for fallback (or only,
-# currently)
+# Write bootloader entries for the standard kernel also the LTS kernel, which
+# can be used for fallback.
 cat <<EOF > /mnt/boot/loader/entries/arch.conf
 title    Arch Linux
 linux    /vmlinuz-linux
@@ -272,6 +286,8 @@ initrd   /initramfs-linux.img
 options  $boot_options
 EOF
 
+# This is the LTS kernel, and should stay stable even if something breaks with
+# the zfs-linux module.
 cat <<EOF > /mnt/boot/loader/entries/arch-lts.conf
 title    Arch Linux LTS
 linux    /vmlinuz-linux-lts
@@ -279,20 +295,28 @@ initrd   /initramfs-linux-lts.img
 options  $boot_options
 EOF
 
-# Rebuild the initramfs images, after setting languages so we pick up the right
-# keyboard layout for the console
-# arch-chroot /mnt mkinitcpio -p linux
-# arch-chroot /mnt mkinitcpio -p linux-lts
+# Boot the standard kernel by default
+cat <<EOF > /mnt/boot/loader/loader.conf
+default arch
+timeout 3
+EOF
 
-# figure out which user we want to use
-user=$(dialog --stdout --inputbox "Enter admin username" 0 0) || exit 1
-clear
-: ${user:?"user cannot be empty"}
+function add_user() {
+  # figure out which user we want to use
+  user=$(dialog --stdout --inputbox "Enter admin username" 0 0) || exit 1
+  clear
+  : ${user:?"user cannot be empty"}
 
-arch-chroot /mnt useradd -mU \
-  --uid 1185 \
-  -G wheel,uucp,video,audio,storage,games,input \
-  "$user"
+  # Add the user
+  arch-chroot /mnt useradd -mU \
+    --uid 1185 \
+    -G wheel,uucp,video,audio,storage,games,input \
+    "$user"
+
+  # Set the password
+  echo -n "$user password: "; arch-chroot /mnt passwd "$user"
+}
+add_user
 
 cat <<EOF > "/mnt/home/$user/first-boot.sh"
 #!/bin/bash
@@ -344,11 +368,9 @@ arch-chroot /mnt chown -R "$user:" "/home/$user"
 # Set up the wheel group to have sudo access
 echo "%wheel ALL=(ALL) ALL" >> /mnt/etc/sudoers
 
-# Set passwords for the default admin user and root
-# TODO: Set root password to random string
-for u in $user root; do
-  echo -n "$u password: "; arch-chroot /mnt passwd "$u"
-done
+# Set a random password for the root user.
+password="$(openssl rand -base64 32)"
+echo "root:$password" | chpasswd --root /mnt
 
 # Copy this script into the new installation for reference
 cp "$0" /mnt/home/$user/$(basename "$0")

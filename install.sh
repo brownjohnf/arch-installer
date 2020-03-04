@@ -329,11 +329,15 @@ echo "
 !! WE WILL NOW PERFORM FIRST-BOOT CONFIGURATION OF THE ZFS SYSTEM !!
    DO NOT SKIP THIS OR YOUR SYSTEM WILL FAIL TO BOOT AGAIN
 
+   If you don't have an internet connection, sort that out and then
+   run \`./first-boot.sh\`. Afterwards, remove the final line from
+   .bashrc so this doesn't run again.
+
 
 "
 
 # Check for internet
-ping -c 1 github.com
+ping -c 1 github.com > /dev/null
 
 sudo zpool set cachefile=/etc/zfs/zpool.cache zroot
 sudo systemctl enable zfs.target

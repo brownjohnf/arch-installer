@@ -273,8 +273,8 @@ if [ "${product_name}" == "XPS159560" ]; then
   echo FONT=ter-132n >> /mnt/etc/vconsole.conf
 
   # We also need to set the following options to avoid hanging at some point
-  # after boot.
-  boot_options="${boot_options} nouveau.modeset=0 acpi_rev_override=1"
+  # after boot, in improve power consumption
+  boot_options="${boot_options} nouveau.modeset=0 acpi_rev_override=1 enable_fbc=1 enable_psr=1 disable_power_well=0 pci=noaer"
 fi
 
 # Write bootloader entries for the standard kernel also the LTS kernel, which

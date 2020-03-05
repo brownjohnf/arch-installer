@@ -121,7 +121,7 @@ mkdir -p /mnt/etc/zfs
 cp /etc/zfs/zpool.cache /mnt/etc/zfs/zpool.cache
 
 # Make a /boot directory and mount our EFI boot partition there
-mkdir -p /mnt/boot
+mkdir /mnt/boot
 mount "$part_boot" /mnt/boot
 
 ### Install and configure the base system ###
@@ -152,6 +152,11 @@ pacstrap /mnt \
   openssh \
   sudo \
   tmux
+
+# Make the mountpoint for /mnt/pw and set permissions. Needs to happen after the
+# pacstrap so that /mnt will exist in the chroot.
+mkdir /mnt/mnt/pw
+zfs mount zroot/pw
 
 # Generate an fstab and put it in the chroot environment. We only want the boot
 # partition in it; the rest gets handled by ZFS
@@ -315,9 +320,15 @@ function add_user() {
 
   # Set the password
   echo -n "$user password: "; arch-chroot /mnt passwd "$user"
+
+  # Set the /mnt/pw directory to be owned by the user
+  arch-chroot /mnt chown -R "$user:" /mnt/pw
 }
 add_user
 
+# Write a first-boot file that we'll run the first time the system is
+# rebooted after running this install script. This will configure things
+# correctly so that the system continues booting.
 cat <<EOF > "/mnt/home/$user/first-boot.sh"
 #!/bin/bash
 
@@ -330,7 +341,7 @@ echo "
    DO NOT SKIP THIS OR YOUR SYSTEM WILL FAIL TO BOOT AGAIN
 
    If you don't have an internet connection, sort that out and then
-   run \`./first-boot.sh\`. Afterwards, remove the final line from
+   run './first-boot.sh'. Afterwards, remove the final line from
    .bashrc so this doesn't run again.
 
 
@@ -381,6 +392,8 @@ cp "$0" /mnt/home/$user/$(basename "$0")
 
 # Unmount everything to get ready for reboot
 umount /mnt/boot
+# Have to manually unmount pw because it's mount setting is noauto.
+zfs umount zroot/pw
 zfs umount -a
 zpool export zroot
 

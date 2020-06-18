@@ -1,0 +1,13 @@
+[package]
+name = "arch-installer"
+version = "0.1.0"
+authors = ["Jack Brown <jack@brownjohnf.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+structopt = "0.3.14"
+env_logger = "0.7.1"
+log = "0.4.8"
+anyhow = "1.0.31"

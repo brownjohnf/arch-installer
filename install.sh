@@ -26,8 +26,6 @@ modprobe zfs
 
 MIRRORLIST_URL="https://www.archlinux.org/mirrorlist/?country=US&protocol=https&use_mirror_status=on"
 
-pacman -Sy --needed --noconfirm pacman-contrib dmidecode
-
 # Only rank the mirrors if we're not cleaning up, indicating this is a fresh run
 if [ -z "$CLEAN" ]; then
   echo "Updating mirror list"

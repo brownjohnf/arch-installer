@@ -1,6 +1,7 @@
-use anyhow::Result;
-use log::debug;
-use std::{error::Error, fmt, process, str::FromStr};
+use anyhow::{anyhow, Context, Result};
+use log::{debug, error, info};
+use simplelog::{CombinedLogger, Config, LevelFilter, TermLogger, TerminalMode, WriteLogger};
+use std::{error::Error, fmt, fs, process, str::FromStr};
 use structopt::StructOpt;
 
 #[cfg(test)]
@@ -73,41 +74,129 @@ impl fmt::Display for FsError {
 
 impl Error for FsError {}
 
-fn exec(cmd: &[&str]) -> Result<process::Output> {
-    let (cmd, args) = match cmd {
-        [cmd, args @ ..] => (cmd, args),
-        _ => panic!("invalid cmd/arg input"),
-    };
+#[derive(Debug)]
+struct ExecError(String);
 
-    Ok(process::Command::new(cmd).args(args).output()?)
+impl fmt::Display for ExecError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
 }
 
+impl Error for ExecError {}
+
+fn exec(cmd: &[&str]) -> Result<process::Output> {
+    debug!("exec: running: {:?}", cmd);
+
+    let (cmd, args) = match cmd {
+        [cmd, args @ ..] => (cmd, args),
+        _ => return Err(anyhow!("missing command".to_string())),
+    };
+
+    Ok(process::Command::new(cmd)
+        .args(args)
+        .output()
+        .with_context(|| {
+            format!(
+                "{:?}
+                                                                   {:?}",
+                cmd, args
+            )
+        })?)
+}
+
+// Set the mirrorlist for install.
+// TODO: Accept country and other options?
+const MIRRORLIST_URL: &str =
+    "https://www.archlinux.org/mirrorlist/?country=US&protocol=https&use_mirror_status=on";
+
 fn main() {
-    env_logger::init();
+    CombinedLogger::init(vec![TermLogger::new(
+        LevelFilter::Debug,
+        Config::default(),
+        TerminalMode::Mixed,
+    )])
+    .unwrap();
 
     let opt = Opt::from_args();
     debug!("{:?}", opt);
 
+    if let Err(e) = run(opt) {
+        error!("{}", e);
+        process::exit(1);
+    }
+}
+
+fn run(opt: Opt) -> Result<()> {
     // Set up all our inputs
     let filesystem = opt.filesystem;
+    debug!("filesystem: {}", filesystem);
     let clean = opt.clean;
+    debug!("clean up: {}", filesystem);
     let hostname = if let Some(f) = opt.hostname {
         f
     } else {
         // TODO: generate hostname
         "testarch".to_string()
     };
+    debug!("hostname: {}", filesystem);
     let wifi = opt.wifi;
+    debug!("configure wifi: {}", filesystem);
     let user = if let Some(u) = opt.username {
         u
     } else {
         "testuser".to_string()
     };
+    debug!("default user: {}", filesystem);
 
     // Clean the system if was requested.
-    cleanup(filesystem).unwrap();
+    if clean {
+        cleanup(filesystem)?;
+    }
+
+    // Ensure the system is booted in EFI.
+    assert_efi()?;
+
+    // Ensure the ZFS module is present
+    if !exec(&["modprobe", "zfs"])?.status.success() {
+        return Err(anyhow!("zfs module is not loaded"));
+    }
+
+    // Rank the mirrors, but only if we're not cleaning up, indicating this is a
+    // fresh run. This is because ranking takes a while.
+    if !clean {
+        if !exec(&[
+            "bash",
+            "-c",
+            &format!(
+                "curl -s {} | sed -e 's/^#Server/Server/' -e '/^#/d' | rankmirrors -n 5 - > /etc/pacman.d/mirrorlist",
+                MIRRORLIST_URL
+            ),
+        ])?
+        .status
+        .success()
+        {
+            return Err(anyhow!("error setting up mirrors: {:?}"));
+        }
+    }
+
+    Ok(())
+}
+
+fn assert_efi() -> Result<()> {
+    if fs::metadata("/sys/firmware/efi/efivars")?.is_dir() {
+        return Ok(());
+    }
+
+    Err(anyhow!("system does not appear to be booted in EFI mode"))
 }
 
 fn cleanup(f: Filesystem) -> Result<()> {
+    debug!("cleaning up from any prior run that may have occurred");
+
+    exec(&["umount", "/mnt/boot"])?;
+    exec(&["zfs", "umount", "-a"])?;
+    exec(&["zpool", "destroy", "zroot"])?;
+
     Ok(())
 }

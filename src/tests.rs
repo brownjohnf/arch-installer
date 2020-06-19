@@ -12,3 +12,8 @@ fn test_exec() {
         "true"
     );
 }
+
+#[test]
+fn test_devices() {
+    eprintln!("{:?}", devices().unwrap());
+}

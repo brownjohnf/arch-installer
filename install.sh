@@ -43,7 +43,7 @@ timedatectl set-ntp true
 
 ### Setup the disk and partitions ###
 ### Make sure we provide enough room on boot for multiple kernels.
-devicelist=$(lsblk -dplnx size -o name,size | grep -Ev "boot|rpmb|loop" | tac)
+devicelist=$(lsblk --nodeps --paths --list --noheadings --sort size -o name,size | grep -Ev "boot|rpmb|loop" | tac)
 device=$(dialog --stdout --menu "Select installation disk" 0 0 0 ${devicelist}) || exit 1
 clear
 

@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Context, Result};
 use log::{debug, error, info};
 use simplelog::{CombinedLogger, Config, LevelFilter, TermLogger, TerminalMode, WriteLogger};
-use std::{error::Error, fmt, fs, process, str::FromStr};
+use std::{error::Error, fmt, fs, path::PathBuf, process, str::FromStr};
 use structopt::StructOpt;
 
 #[cfg(test)]
@@ -85,37 +85,20 @@ impl fmt::Display for ExecError {
 
 impl Error for ExecError {}
 
-fn exec(cmd: &[&str]) -> Result<process::Output> {
-    debug!("exec: running: {:?}", cmd);
-
-    let (cmd, args) = match cmd {
-        [cmd, args @ ..] => (cmd, args),
-        _ => return Err(anyhow!("missing command".to_string())),
-    };
-
-    Ok(process::Command::new(cmd)
-        .args(args)
-        .output()
-        .with_context(|| {
-            format!(
-                "{:?}
-                                                                   {:?}",
-                cmd, args
-            )
-        })?)
-}
-
 // Set the mirrorlist for install.
 // TODO: Accept country and other options?
 const MIRRORLIST_URL: &str =
     "https://www.archlinux.org/mirrorlist/?country=US&protocol=https&use_mirror_status=on";
 
 fn main() {
-    CombinedLogger::init(vec![TermLogger::new(
-        LevelFilter::Debug,
-        Config::default(),
-        TerminalMode::Mixed,
-    )])
+    CombinedLogger::init(vec![
+        WriteLogger::new(
+            LevelFilter::Debug,
+            Config::default(),
+            fs::File::create("/tmp/arch-installer.log").unwrap(),
+        ),
+        TermLogger::new(LevelFilter::Debug, Config::default(), TerminalMode::Mixed),
+    ])
     .unwrap();
 
     let opt = Opt::from_args();
@@ -180,7 +163,52 @@ fn run(opt: Opt) -> Result<()> {
         }
     }
 
+    // Set the datetime from NTP.
+    if !exec(&["timedatectl", "set-ntp", "true"])?.status.success() {
+        return Err(anyhow!("error setting system time from ntp"));
+    }
+
+    // Get a list of block devices so the user can select where they'd like to
+    // install Arch.
+    let devices = devices()?;
+
     Ok(())
+}
+
+fn devices() -> Result<Vec<(String, usize)>> {
+    let mut out = vec![];
+
+    let block = PathBuf::from("/sys/dev/block");
+    for entry in fs::read_dir("/sys/block")? {
+        let entry = entry?;
+        let mut path = entry.path();
+
+        // Skip this device if it's hidden.
+        if fs::read_to_string(path.join("hidden"))?.trim() == "1" {
+            continue;
+        }
+
+        // Get the size of the device.
+        let size: usize = fs::read_to_string(path.join("size"))?.trim().parse()?;
+
+        // Get the device ID for the device.
+        let device = fs::read_to_string(path.join("dev"))?;
+        let device = device.trim();
+        let block = block.join(device);
+
+        // Get the size of the device.
+        let size: usize = fs::read_to_string(block.join("size"))?.trim().parse()?;
+        if size < 1 {
+            continue;
+        }
+
+        let name = path.file_name().unwrap().to_str().unwrap().to_string();
+
+        out.push((name, size));
+    }
+
+    out.sort_by(|a, b| b.cmp(a));
+    Ok(out)
 }
 
 fn assert_efi() -> Result<()> {
@@ -199,4 +227,79 @@ fn cleanup(f: Filesystem) -> Result<()> {
     exec(&["zpool", "destroy", "zroot"])?;
 
     Ok(())
+}
+
+fn exec(cmd: &[&str]) -> Result<process::Output> {
+    debug!("exec: running: {:?}", cmd);
+
+    let (cmd, args) = match cmd {
+        [cmd, args @ ..] => (cmd, args),
+        _ => return Err(anyhow!("missing command".to_string())),
+    };
+
+    Ok(process::Command::new(cmd)
+        .args(args)
+        .output()
+        .with_context(|| format!("{:?} {:?}", cmd, args))?)
+}
+use cursive::align::HAlign;
+use cursive::event::EventResult;
+use cursive::traits::*;
+use cursive::views::{Dialog, OnEventView, SelectView, TextView};
+use cursive::Cursive;
+
+// We'll use a SelectView here.
+//
+// A SelectView is a scrollable list of items, from which the user can select
+// one.
+
+fn select(items: &[String]) -> Result<String> {
+    let mut out = String::new();
+
+    let mut select = SelectView::new()
+        // Center the text horizontally
+        .h_align(HAlign::Center)
+        // Use keyboard to jump to the pressed letters
+        .autojump();
+
+    // Populate the select list with the input.
+    select.add_all_str(items);
+
+    // Sets the callback for when "Enter" is pressed.
+    select.set_on_submit(|s, device| {
+        out = device;
+        s.quit();
+    });
+
+    // Let's override the `j` and `k` keys for navigation
+    let select = OnEventView::new(select)
+        .on_pre_event_inner('k', |s, _| {
+            s.select_up(1);
+            Some(EventResult::Consumed(None))
+        })
+        .on_pre_event_inner('j', |s, _| {
+            s.select_down(1);
+            Some(EventResult::Consumed(None))
+        });
+
+    let mut siv = cursive::default();
+
+    // Let's add a ResizedView to keep the list at a reasonable size
+    // (it can scroll anyway).
+    siv.add_layer(
+        Dialog::around(select.scrollable().fixed_size((20, 10)))
+            .title("Select a target install disk"),
+    );
+
+    siv.run();
+
+    Ok(out);
+}
+
+// Let's put the callback in a separate function to keep it clean,
+// but it's not required.
+fn show_next_window(siv: &mut Cursive, city: &str) {
+    siv.pop_layer();
+    let text = format!("{} is a great city!", city);
+    siv.add_layer(Dialog::around(TextView::new(text)).button("Quit", |s| s.quit()));
 }

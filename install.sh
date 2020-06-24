@@ -92,15 +92,6 @@ for path in /home /var /var/log /var/log/journal /etc /data /data /docker; do
   zfs create -o mountpoint=$path zroot/ROOT$path || true
 done
 
-# Create an encrypted partition which won't auto-mount where we can store
-# secrets that we want manually locked/unlocked.
-zfs create \
-  -o mountpoint=/mnt/pw \
-  -o canmount=noauto \
-  -o encryption=on \
-  -o keyformat=passphrase \
-  zroot/pw
-
 # Unmount everything for now
 zfs unmount -a
 

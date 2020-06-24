@@ -17,3 +17,15 @@ fn test_exec() {
 fn test_devices() {
     eprintln!("{:?}", devices().unwrap());
 }
+
+#[test]
+fn test_select() {
+    assert_eq!(
+        select(
+            "please select item 2",
+            &["item 1".to_string(), "item 2".to_string()]
+        )
+        .unwrap(),
+        1,
+    );
+}

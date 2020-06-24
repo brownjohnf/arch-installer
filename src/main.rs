@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Context, Result};
-use log::{debug, error, info};
+use dialoguer::{theme::ColorfulTheme, Confirm, Input, Select};
+use log::{debug, error, info, warn};
 use simplelog::{CombinedLogger, Config, LevelFilter, TermLogger, TerminalMode, WriteLogger};
 use std::{error::Error, fmt, fs, path::PathBuf, process, str::FromStr};
 use structopt::StructOpt;
@@ -12,27 +13,35 @@ mod tests;
 #[structopt(rename_all = "kebab-case")]
 struct Opt {
     /// Which filesystem to use for the installation.
-    #[structopt(short, long, default_value = "zfs")]
-    filesystem: Filesystem,
+    #[structopt(short, long)]
+    filesystem: Option<Filesystem>,
 
     // Whether or not to clean up from a previous failed run.
     #[structopt(long)]
     clean: bool,
 
-    // Hostname for the system. Will generate a random one if not set.
+    // Hostname for the system. Will ask for one if not set.
     #[structopt(short, long)]
     hostname: Option<String>,
 
     // Whether or not to attempt to set up wifi.
     #[structopt(short, long)]
-    wifi: bool,
+    wifi: Option<bool>,
 
     // Name of the default user. Will generate a random one if not set.
     #[structopt(short, long)]
     username: Option<String>,
+
+    // Path to the device to install the system on. Will prompt if not passed.
+    #[structopt(short, long)]
+    device: Option<PathBuf>,
+
+    // Execute as dry-run; parse the options but don't touch the system.
+    #[structopt(short = "n", long)]
+    dry_run: bool,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 enum Filesystem {
     Ext4,
     ZFS,
@@ -52,38 +61,16 @@ impl fmt::Display for Filesystem {
 }
 
 impl FromStr for Filesystem {
-    type Err = FsError;
+    type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(match s {
             "ext4" => Self::Ext4,
             "zfs" => Self::ZFS,
-            _ => return Err(FsError("unknown fs".to_string())),
+            _ => return Err(anyhow!("unknown fs".to_string())),
         })
     }
 }
-
-#[derive(Debug)]
-struct FsError(String);
-
-impl fmt::Display for FsError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl Error for FsError {}
-
-#[derive(Debug)]
-struct ExecError(String);
-
-impl fmt::Display for ExecError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl Error for ExecError {}
 
 // Set the mirrorlist for install.
 // TODO: Accept country and other options?
@@ -112,25 +99,60 @@ fn main() {
 
 fn run(opt: Opt) -> Result<()> {
     // Set up all our inputs
-    let filesystem = opt.filesystem;
+    let filesystem = if let Some(f) = opt.filesystem {
+        f
+    } else {
+        let options = &[Filesystem::ZFS];
+        let i = select(
+            "What filesystem would you like to use?",
+            &["zfs".to_string()],
+        )?;
+
+        options[i]
+    };
     debug!("filesystem: {}", filesystem);
     let clean = opt.clean;
-    debug!("clean up: {}", filesystem);
+    debug!("clean up: {}", clean);
     let hostname = if let Some(f) = opt.hostname {
         f
     } else {
-        // TODO: generate hostname
-        "testarch".to_string()
+        input("What should the hostname be?")?
     };
-    debug!("hostname: {}", filesystem);
-    let wifi = opt.wifi;
-    debug!("configure wifi: {}", filesystem);
+    debug!("hostname: {}", hostname);
+    let wifi = if let Some(w) = opt.wifi {
+        w
+    } else {
+        confirm("Would you like to configured WiFi?")?
+    };
+    debug!("configure wifi: {}", wifi);
     let user = if let Some(u) = opt.username {
         u
     } else {
-        "testuser".to_string()
+        input("Default username?")?
     };
-    debug!("default user: {}", filesystem);
+    debug!("default user: {}", user);
+    // Select the device
+    let device = if let Some(d) = opt.device {
+        d
+    } else {
+        let dev = devices()?;
+        let i = select(
+            "Select installation device",
+            &dev.iter()
+                .map(|(path, bytes)| format!("{} {}", path.to_str().unwrap(), bytes))
+                .collect::<Vec<String>>(),
+        )?;
+
+        PathBuf::from(&dev[i].0)
+    };
+    debug!("device: {:?}", device);
+
+    if opt.dry_run {
+        warn!("running in dry-run mode; exiting now");
+        return Ok(());
+    }
+
+    panic!("safety third!");
 
     // Clean the system if was requested.
     if clean {
@@ -168,14 +190,47 @@ fn run(opt: Opt) -> Result<()> {
         return Err(anyhow!("error setting system time from ntp"));
     }
 
-    // Get a list of block devices so the user can select where they'd like to
-    // install Arch.
-    let devices = devices()?;
+    // Partition the disk.
+    if !exec(&[
+        "parted",
+        "--script",
+        device.to_str().unwrap(),
+        "--",
+        "
+  mklabel gpt \
+  mkpart ESP fat32 1Mib 2GiB \
+  set 1 boot on \
+  mkpart primary ext4 2GiB 100%",
+    ])?
+    .status
+    .success()
+    {
+        return Err(anyhow!("error partitioning disk"));
+    }
 
     Ok(())
 }
 
-fn devices() -> Result<Vec<(String, usize)>> {
+fn confirm(title: &str) -> Result<bool> {
+    Ok(Confirm::new().with_text(title).interact()?)
+}
+
+fn input(title: &str) -> Result<String> {
+    Ok(Input::<String>::new().with_prompt(title).interact()?)
+}
+
+fn partitions_for_device(device: &Path) -> Result<Vec<PathBuf>> {
+// Get the device id for this device.
+let device = device.file_name()?;
+let id = fs::read_to_string(PathBuf::from("/sys/block/").join(device).join("dev"))?.strip();
+let path = PathBuf::from("/sys/dev/block")
+        let mut partition = 1;
+    while path.join(format!("{}:{}", disk, partition)).exists() {
+        partition += 1;
+    }
+}
+
+fn devices() -> Result<Vec<(PathBuf, usize)>> {
     let mut out = vec![];
 
     let block = PathBuf::from("/sys/dev/block");
@@ -202,7 +257,8 @@ fn devices() -> Result<Vec<(String, usize)>> {
             continue;
         }
 
-        let name = path.file_name().unwrap().to_str().unwrap().to_string();
+        let name =
+            PathBuf::from("/dev").join(path.file_name().unwrap().to_str().unwrap().to_string());
 
         out.push((name, size));
     }
@@ -242,64 +298,12 @@ fn exec(cmd: &[&str]) -> Result<process::Output> {
         .output()
         .with_context(|| format!("{:?} {:?}", cmd, args))?)
 }
-use cursive::align::HAlign;
-use cursive::event::EventResult;
-use cursive::traits::*;
-use cursive::views::{Dialog, OnEventView, SelectView, TextView};
-use cursive::Cursive;
 
-// We'll use a SelectView here.
-//
-// A SelectView is a scrollable list of items, from which the user can select
-// one.
-
-fn select(items: &[String]) -> Result<String> {
-    let mut out = String::new();
-
-    let mut select = SelectView::new()
-        // Center the text horizontally
-        .h_align(HAlign::Center)
-        // Use keyboard to jump to the pressed letters
-        .autojump();
-
-    // Populate the select list with the input.
-    select.add_all_str(items);
-
-    // Sets the callback for when "Enter" is pressed.
-    select.set_on_submit(|s, device| {
-        out = device;
-        s.quit();
-    });
-
-    // Let's override the `j` and `k` keys for navigation
-    let select = OnEventView::new(select)
-        .on_pre_event_inner('k', |s, _| {
-            s.select_up(1);
-            Some(EventResult::Consumed(None))
-        })
-        .on_pre_event_inner('j', |s, _| {
-            s.select_down(1);
-            Some(EventResult::Consumed(None))
-        });
-
-    let mut siv = cursive::default();
-
-    // Let's add a ResizedView to keep the list at a reasonable size
-    // (it can scroll anyway).
-    siv.add_layer(
-        Dialog::around(select.scrollable().fixed_size((20, 10)))
-            .title("Select a target install disk"),
-    );
-
-    siv.run();
-
-    Ok(out);
-}
-
-// Let's put the callback in a separate function to keep it clean,
-// but it's not required.
-fn show_next_window(siv: &mut Cursive, city: &str) {
-    siv.pop_layer();
-    let text = format!("{} is a great city!", city);
-    siv.add_layer(Dialog::around(TextView::new(text)).button("Quit", |s| s.quit()));
+/// Allow the user to interactively select an item.
+fn select(title: &str, items: &[String]) -> Result<usize> {
+    Ok(Select::with_theme(&ColorfulTheme::default())
+        .with_prompt(title)
+        .default(0)
+        .items(items)
+        .interact()?)
 }

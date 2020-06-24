@@ -14,11 +14,6 @@ fn test_exec() {
 }
 
 #[test]
-fn test_devices() {
-    eprintln!("{:?}", devices().unwrap());
-}
-
-#[test]
 fn test_select() {
     assert_eq!(
         select(

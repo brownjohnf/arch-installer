@@ -2,11 +2,22 @@ use anyhow::{anyhow, Context, Result};
 use dialoguer::{theme::ColorfulTheme, Confirm, Input, Select};
 use log::{debug, error, info, warn};
 use simplelog::{CombinedLogger, Config, LevelFilter, TermLogger, TerminalMode, WriteLogger};
-use std::{error::Error, fmt, fs, path::PathBuf, process, str::FromStr};
+use std::{
+    error::Error,
+    fmt, fs,
+    path::{Path, PathBuf},
+    process,
+    str::FromStr,
+};
 use structopt::StructOpt;
 
+mod device;
+mod filesystem;
 #[cfg(test)]
 mod tests;
+
+use device::Device;
+use filesystem::Filesystem;
 
 #[derive(Debug, StructOpt)]
 #[structopt(setting = structopt::clap::AppSettings::ColoredHelp)]
@@ -14,7 +25,7 @@ mod tests;
 struct Opt {
     /// Which filesystem to use for the installation.
     #[structopt(short, long)]
-    filesystem: Option<Filesystem>,
+    filesystem: Option<String>,
 
     // Whether or not to clean up from a previous failed run.
     #[structopt(long)]
@@ -39,37 +50,6 @@ struct Opt {
     // Execute as dry-run; parse the options but don't touch the system.
     #[structopt(short = "n", long)]
     dry_run: bool,
-}
-
-#[derive(Clone, Copy, Debug)]
-enum Filesystem {
-    Ext4,
-    ZFS,
-}
-
-impl fmt::Display for Filesystem {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{}",
-            match self {
-                Self::Ext4 => "ext4",
-                Self::ZFS => "zfs",
-            }
-        )
-    }
-}
-
-impl FromStr for Filesystem {
-    type Err = anyhow::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(match s {
-            "ext4" => Self::Ext4,
-            "zfs" => Self::ZFS,
-            _ => return Err(anyhow!("unknown fs".to_string())),
-        })
-    }
 }
 
 // Set the mirrorlist for install.
@@ -102,14 +82,15 @@ fn run(opt: Opt) -> Result<()> {
     let filesystem = if let Some(f) = opt.filesystem {
         f
     } else {
-        let options = &[Filesystem::ZFS];
+        let options = &["zfs".to_string()];
         let i = select(
             "What filesystem would you like to use?",
             &["zfs".to_string()],
         )?;
 
-        options[i]
+        options[i].to_string()
     };
+    let filesystem = filesystem::from_str(filesystem)?;
     debug!("filesystem: {}", filesystem);
     let clean = opt.clean;
     debug!("clean up: {}", clean);
@@ -133,17 +114,18 @@ fn run(opt: Opt) -> Result<()> {
     debug!("default user: {}", user);
     // Select the device
     let device = if let Some(d) = opt.device {
-        d
+        Device::from_path(d)
     } else {
-        let dev = devices()?;
+        let mut dev = Device::list()?;
         let i = select(
             "Select installation device",
             &dev.iter()
-                .map(|(path, bytes)| format!("{} {}", path.to_str().unwrap(), bytes))
+                .map(|d| format!("/dev/{} {}", d.name, d.bytes))
                 .collect::<Vec<String>>(),
         )?;
 
-        PathBuf::from(&dev[i].0)
+        // Warning: this will panic if i is out of bounds.
+        dev.remove(i)
     };
     debug!("device: {:?}", device);
 
@@ -152,11 +134,14 @@ fn run(opt: Opt) -> Result<()> {
         return Ok(());
     }
 
-    panic!("safety third!");
+    if confirm("Installation will be destructive; continue?")? {
+        error!("no confirmation received; aborting");
+        process::exit(1);
+    }
 
     // Clean the system if was requested.
     if clean {
-        cleanup(filesystem)?;
+        filesystem.cleanup()?;
     }
 
     // Ensure the system is booted in EFI.
@@ -169,6 +154,7 @@ fn run(opt: Opt) -> Result<()> {
 
     // Rank the mirrors, but only if we're not cleaning up, indicating this is a
     // fresh run. This is because ranking takes a while.
+    // TODO: Do all this straight in rust using reqwest or something.
     if !clean {
         if !exec(&[
             "bash",
@@ -190,11 +176,12 @@ fn run(opt: Opt) -> Result<()> {
         return Err(anyhow!("error setting system time from ntp"));
     }
 
-    // Partition the disk.
+    // Partition the disk. Make a large /boot partition so that we have room for
+    // multiple kernels, etc.
     if !exec(&[
         "parted",
         "--script",
-        device.to_str().unwrap(),
+        &device.dev(),
         "--",
         "
   mklabel gpt \
@@ -208,63 +195,20 @@ fn run(opt: Opt) -> Result<()> {
         return Err(anyhow!("error partitioning disk"));
     }
 
+    // Get our partitions.
+    let parts = device.partitions()?;
+    let part_boot = &parts[0];
+    let part_root = &parts[1];
+
     Ok(())
 }
 
 fn confirm(title: &str) -> Result<bool> {
-    Ok(Confirm::new().with_text(title).interact()?)
+    Ok(Confirm::new().with_prompt(title).interact()?)
 }
 
 fn input(title: &str) -> Result<String> {
     Ok(Input::<String>::new().with_prompt(title).interact()?)
-}
-
-fn partitions_for_device(device: &Path) -> Result<Vec<PathBuf>> {
-// Get the device id for this device.
-let device = device.file_name()?;
-let id = fs::read_to_string(PathBuf::from("/sys/block/").join(device).join("dev"))?.strip();
-let path = PathBuf::from("/sys/dev/block")
-        let mut partition = 1;
-    while path.join(format!("{}:{}", disk, partition)).exists() {
-        partition += 1;
-    }
-}
-
-fn devices() -> Result<Vec<(PathBuf, usize)>> {
-    let mut out = vec![];
-
-    let block = PathBuf::from("/sys/dev/block");
-    for entry in fs::read_dir("/sys/block")? {
-        let entry = entry?;
-        let mut path = entry.path();
-
-        // Skip this device if it's hidden.
-        if fs::read_to_string(path.join("hidden"))?.trim() == "1" {
-            continue;
-        }
-
-        // Get the size of the device.
-        let size: usize = fs::read_to_string(path.join("size"))?.trim().parse()?;
-
-        // Get the device ID for the device.
-        let device = fs::read_to_string(path.join("dev"))?;
-        let device = device.trim();
-        let block = block.join(device);
-
-        // Get the size of the device.
-        let size: usize = fs::read_to_string(block.join("size"))?.trim().parse()?;
-        if size < 1 {
-            continue;
-        }
-
-        let name =
-            PathBuf::from("/dev").join(path.file_name().unwrap().to_str().unwrap().to_string());
-
-        out.push((name, size));
-    }
-
-    out.sort_by(|a, b| b.cmp(a));
-    Ok(out)
 }
 
 fn assert_efi() -> Result<()> {
@@ -273,16 +217,6 @@ fn assert_efi() -> Result<()> {
     }
 
     Err(anyhow!("system does not appear to be booted in EFI mode"))
-}
-
-fn cleanup(f: Filesystem) -> Result<()> {
-    debug!("cleaning up from any prior run that may have occurred");
-
-    exec(&["umount", "/mnt/boot"])?;
-    exec(&["zfs", "umount", "-a"])?;
-    exec(&["zpool", "destroy", "zroot"])?;
-
-    Ok(())
 }
 
 fn exec(cmd: &[&str]) -> Result<process::Output> {

@@ -168,12 +168,22 @@ fn main() -> Result<()> {
     let part_boot = &parts[0];
     let part_root = &parts[2];
 
+    // Get rid of any old partition/filesystem info from the partitions.
     wipe(part_boot)?;
     wipe(part_root)?;
+
+    // Set up the boot partition filesystem.
+    let fat32 = filesystem::FAT32 {};
+    fat32.init(part_boot)?;
+
+    // Set up the root partition filesystem.
+    filesystem.init(part_root)?;
 
     Ok(())
 }
 
+// Wipe any existing data from the partitions. This will get rid of any extant
+// file contents which which still be around even after wiping the inode data.
 fn wipe(partition: &Device) -> Result<()> {
     if !exec(&["wipefs", &partition.dev()])?.status.success() {
         return Err(format_err!("error wiping partition {:?}", partition));
@@ -182,6 +192,7 @@ fn wipe(partition: &Device) -> Result<()> {
     Ok(())
 }
 
+/// Create partitions.
 fn partition(device: &Device) -> Result<()> {
     if !exec(&[
         "parted",

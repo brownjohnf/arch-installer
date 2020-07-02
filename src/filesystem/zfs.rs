@@ -1,4 +1,5 @@
-use anyhow::Result;
+use crate::{exec, Device};
+use anyhow::{format_err, Result};
 use std::fmt;
 
 #[derive(Clone, Copy, Debug)]
@@ -11,6 +12,44 @@ impl super::Filesystem for ZFS {
         crate::exec(&["zpool", "destroy", "zroot"])?;
 
         Ok(())
+    }
+
+    fn init(&self, partition: &Device) -> Result<Self> {
+        if !exec(&[
+            "dd",
+            "if=/dev/urandom",
+            &format!("of={}", partition.dev()),
+            "bs=512",
+            "count=20480",
+        ])?
+        .status
+        .success()
+        {
+            return Err(format_err!(
+                "error using dd to overwrite beginning of {}",
+                partition.dev()
+            ));
+        }
+
+        if !exec(&[
+            "zpool",
+            "create",
+            "-f",
+            "zroot",
+            "-m",
+            "none",
+            &partition.dev(),
+        ])?
+        .status
+        .success()
+        {
+            return Err(format_err!(
+                "error initializing zpool on {}",
+                partition.dev()
+            ));
+        }
+
+        Ok(Self {})
     }
 }
 

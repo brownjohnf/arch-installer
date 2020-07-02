@@ -47,16 +47,21 @@ devicelist=$(lsblk --nodeps --paths --list --noheadings --sort size -o name,size
 device=$(dialog --stdout --menu "Select installation disk" 0 0 0 ${devicelist}) || exit 1
 clear
 
+# Make 3 partitions:
+# * 2G boot
+# * 1G secrets/encryption/whatev partition
+# * remaining root partition, for ZFS
 parted --script "${device}" -- \
   mklabel gpt \
   mkpart ESP fat32 1Mib 2GiB \
   set 1 boot on \
-  mkpart primary ext4 2GiB 100%
+  mkpart primary ext4 2GiB 3GiB \
+  mkpart primary ext4 3GiB 100%
 
 # Simple globbing was not enough as on one device I needed to match /dev/mmcblk0p1
 # but not /dev/mmcblk0boot1 while being able to match /dev/sda1 on other devices.
 part_boot="$(ls "${device}"* | grep -E "^${device}p?1$")"
-part_root="$(ls "${device}"* | grep -E "^${device}p?2$")"
+part_root="$(ls "${device}"* | grep -E "^${device}p?3$")"
 
 # Wipe any old fs stuff from the new partitions
 wipefs "${part_boot}"
@@ -141,11 +146,6 @@ pacstrap /mnt \
   openssh \
   sudo \
   tmux
-
-# Make the mountpoint for /mnt/pw and set permissions. Needs to happen after the
-# pacstrap so that /mnt will exist in the chroot.
-mkdir /mnt/mnt/pw
-zfs mount zroot/pw
 
 # Generate an fstab and put it in the chroot environment. We only want the boot
 # partition in it; the rest gets handled by ZFS
@@ -309,9 +309,6 @@ function add_user() {
 
   # Set the password
   echo -n "$user password: "; arch-chroot /mnt passwd "$user"
-
-  # Set the /mnt/pw directory to be owned by the user
-  arch-chroot /mnt chown -R "$user:" /mnt/pw
 }
 add_user
 
@@ -381,8 +378,6 @@ cp "$0" /mnt/home/$user/$(basename "$0")
 
 # Unmount everything to get ready for reboot
 umount /mnt/boot
-# Have to manually unmount pw because it's mount setting is noauto.
-zfs umount zroot/pw
 zfs umount -a
 zpool export zroot
 

@@ -210,7 +210,7 @@ cat <<EOF >>/mnt/etc/pacman.conf
 Server = https://archzfs.com/\$repo/x86_64
 EOF
 
-arch-chroot /mnt pacman-key --recv-keys F75D9D76
+arch-chroot /mnt pacman-key --recv-keys F75D9D76 --keyserver keyserver.ubuntu.com
 arch-chroot /mnt pacman-key --lsign-key F75D9D76
 arch-chroot /mnt pacman -Sy --needed --noconfirm zfs-linux zfs-linux-lts
 

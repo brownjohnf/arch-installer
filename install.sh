@@ -344,8 +344,12 @@ echo "
    run './first-boot.sh'. Afterwards, remove the final line from
    .bashrc so this doesn't run again.
 
+   Pausing briefly for internet connection to become available...
+
 
 "
+
+sleep 5
 
 # Check for internet
 ping -c 1 github.com > /dev/null

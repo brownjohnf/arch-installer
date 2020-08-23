@@ -135,17 +135,30 @@ mount "$part_boot" /mnt/boot
 # are given, pacstrap defaults to the "base" group.
 pacstrap /mnt \
   base \
+  dnsutils \
   git \
+  gnu-netcat \
   linux \
   linux-firmware \
   linux-headers \
   linux-lts \
   linux-lts-headers \
+  lsof \
   neovim \
+  net-tools \
   networkmanager \
   openssh \
+  smartmontools \
+  socat \
+  strace \
   sudo \
-  tmux
+  sysstat \
+  tar \
+  tmux \
+  traceroute \
+  unzip \
+  wget \
+  whois
 
 # Generate an fstab and put it in the chroot environment. We only want the boot
 # partition in it; the rest gets handled by ZFS
@@ -253,14 +266,10 @@ boot_options="zfs=zroot rw"
 
 # Figure out what system we're installing on, in case we need to make any
 # customization to the boot options.
-product_name=$(dmidecode \
-  | grep -A 3 'System Information' \
-  | grep 'Product Name' \
-  | cut -d : -f 2 \
-  | tr -d '[:blank:]')
+product_name=$(dmidecode --string system-product-name)
 
 # TODO: Use regex here instead of all the grepping and cutting.
-if [ "${product_name}" == "XPS159560" ]; then
+if [ "${product_name}" == "XPS 15 9560" ]; then
   # The XPS 15 9560 has a hi-res display with a discrete graphics card, so we'll
   # install and make default a larger font
   arch-chroot /mnt pacman -Sy --needed --noconfirm terminus-font

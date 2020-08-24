@@ -1,6 +1,6 @@
 #!/bin/sh
 
-set -eux
+set -eu
 
 # This function unmounts all filesystems, preparatory for rebooting.
 function umount_all() {
@@ -20,9 +20,9 @@ function checkdeps() {
 # This should format and mount the root partition(s)
 function format_root() {
   # Create a pool made up of the drive
-  mfkfs.ext4 $1
+  mkfs.ext4 $1
 
-  mount $1 /mnt
+  mount -t ext4 $1 /mnt
 }
 
 function make_fstab() {

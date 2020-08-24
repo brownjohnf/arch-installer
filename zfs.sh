@@ -1,6 +1,6 @@
 #!/bin/sh
 
-set -eux
+set -eu
 
 # This function unmounts all filesystems, preparatory for rebooting.
 function umount_all() {

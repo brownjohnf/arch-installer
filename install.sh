@@ -227,6 +227,7 @@ fi
 product_name=$(dmidecode --string system-product-name)
 
 # TODO: Use regex here instead of all the grepping and cutting.
+boot_options=""
 if [ "${product_name}" == "XPS 15 9560" ]; then
   # The XPS 15 9560 has a hi-res display with a discrete graphics card, so we'll
   # install and make default a larger font
@@ -296,7 +297,9 @@ echo "%wheel ALL=(ALL) ALL" >> /mnt/etc/sudoers
 
 # Set a random password for the root user.
 password="$(openssl rand -base64 64)"
-echo "root:$password" | chpasswd --root /mnt
+# For some reason the chpasswd --root /mnt form of the chpasswd command doesn't
+# work here.
+echo "root:$password" | arch-chroot /mnt chpasswd
 
 # Copy this script into the new installation for reference
 cp "$0" /mnt/home/$user/$(basename "$0")

@@ -68,6 +68,9 @@ function make_fstab() {
   genfstab -t PARTUUID /mnt | grep -A 1 $1 > /mnt/etc/fstab
 }
 
+# Set up the hooks correctly for allowing us to unlock the encrypted partitions.
+# Doing this here _should_ mean that when we install the zfs- modules below, the
+# kernels' ramdisks etc. should pick it up.
 function hooks() {
   echo base udev keyboard keymap autodetect modconf block encrypt zfs filesystems
 }

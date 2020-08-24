@@ -167,12 +167,12 @@ if [ -n "${KEYMAP}" ]; then
   echo "KEYMAP=${KEYMAP}" >> /mnt/etc/vconsole.conf
 fi
 
-# Set up the hooks correctly for allowing us to unlock the encrypted partitions.
-# Doing this here _should_ mean that when we install the zfs- modules below, the
-# kernels' ramdisks etc. should pick it up.
-sed -i \
-  "s/^HOOKS.*/HOOKS=($(hooks))/" \
-  /mnt/etc/mkinitcpio.conf
+# Update the hooks we need to boot, if necessary.
+if [ -n "$(hooks)" ]; then
+  sed -i \
+    "s/^HOOKS.*/HOOKS=($(hooks))/" \
+    /mnt/etc/mkinitcpio.conf
+fi
 
 # Install any additional packages we want before rebooting.
 add_packages

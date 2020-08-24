@@ -9,9 +9,9 @@ trap 's=$?; echo "$0: Error on line "$LINENO": $BASH_COMMAND"; exit $s' ERR
 exec 1> >(tee "stdout.log")
 exec 2> >(tee "stderr.log")
 
-if "${FS}" == "zfs"; then
+if [ "${FS}" == "zfs" ]; then
   source ./zfs.sh
-elif "${FS}" == "ext4"; then
+elif [ "${FS}" == "ext4" ]; then
   source ./ext4.sh
 else
   echo "You must specify FS=zfs or FS=ext4!"

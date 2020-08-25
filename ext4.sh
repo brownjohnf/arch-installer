@@ -41,8 +41,11 @@ function add_packages() {
 }
 
 # Set default boot options.
+# TODO: Accept part UUID
+#
+# $1: Root partition
 function additional_boot_options() {
-  true
+  echo root=$1 rw
 }
 
 function first_boot_script() {

@@ -107,6 +107,7 @@ pacstrap /mnt \
   dnsutils \
   git \
   gnu-netcat \
+  intel-ucode \
   linux \
   linux-firmware \
   linux-headers \
@@ -131,19 +132,20 @@ pacstrap /mnt \
 
 make_fstab "${part_boot}" "${part_root}"
 
-# Set up the hostname and /etc/hosts
+# Set up the hostname
 hostname=$(dialog --stdout --inputbox "Enter hostname" 0 0) || exit 1
 clear
 : ${hostname:?"hostname cannot be empty"}
 
 echo "$hostname" > /mnt/etc/hostname
 
+# Add the hostname to /etc/hosts
 hostname_short="$(echo "$hostname" | cut -d '.' -f 1)"
 cat <<EOF > /mnt/etc/hosts
 127.0.0.1 localhost
 ::1       localhost
+127.0.1.1 $hostname $hostname_short
 ::1       $hostname $hostname_short
-127.0.1.1	$hostname $hostname_short
 EOF
 
 # Set the timezone
@@ -227,7 +229,7 @@ fi
 product_name=$(dmidecode --string system-product-name)
 
 # TODO: Use regex here instead of all the grepping and cutting.
-boot_options=""
+boot_options="$(additional_boot_options $part_root)"
 if [ "${product_name}" == "XPS 15 9560" ]; then
   # The XPS 15 9560 has a hi-res display with a discrete graphics card, so we'll
   # install and make default a larger font
@@ -236,20 +238,20 @@ if [ "${product_name}" == "XPS 15 9560" ]; then
 
   # We also need to set the following options to avoid hanging at some point
   # after boot, in improve power consumption
-  boot_options="$(additional_boot_options) nouveau.modeset=0 acpi_rev_override=1 enable_fbc=1 enable_psr=1 disable_power_well=0 pci=noaer"
+  boot_options="${boot_options) nouveau.modeset=0 acpi_rev_override=1 enable_fbc=1 enable_psr=1 disable_power_well=0 pci=noaer"
 fi
 
-# Write bootloader entries for the standard kernel also the LTS kernel, which
-# can be used for fallback.
+# Write bootloader entries for the standard kernel.
 cat <<EOF > /mnt/boot/loader/entries/arch.conf
 title    Arch Linux
 linux    /vmlinuz-linux
+initrd   /intel-ucode.img
 initrd   /initramfs-linux.img
 options  $boot_options
 EOF
 
-# This is the LTS kernel, and should stay stable even if something breaks with
-# the zfs-linux module.
+# Write the bootloader entries for the LTS kernel, and should stay stable even
+# if something breaks with the zfs-linux module.
 cat <<EOF > /mnt/boot/loader/entries/arch-lts.conf
 title    Arch Linux LTS
 linux    /vmlinuz-linux-lts

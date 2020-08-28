@@ -13,6 +13,10 @@ pub(crate) trait Filesystem: Clone + Copy + Debug + Display {
         Ok(())
     }
 
+    fn assert_dependencies(&self) -> Result<()> {
+        Ok(())
+    }
+
     fn init(&self, partition: &Device) -> Result<Self>;
 }
 

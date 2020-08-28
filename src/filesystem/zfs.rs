@@ -1,5 +1,6 @@
 use crate::{exec, Device};
 use anyhow::{format_err, Result};
+use cmd_lib::run_fun;
 use std::fmt;
 
 #[derive(Clone, Copy, Debug)]
@@ -10,6 +11,15 @@ impl super::Filesystem for ZFS {
         crate::exec(&["umount", "/mnt/boot"])?;
         crate::exec(&["zfs", "umount", "-a"])?;
         crate::exec(&["zpool", "destroy", "zroot"])?;
+
+        Ok(())
+    }
+
+    fn assert_dependencies(&self) -> Result<()> {
+        // Ensure the ZFS module is present
+        if run_fun!(modprobe zfs).is_err() {
+            return Err(format_err!("zfs module is not loaded"));
+        }
 
         Ok(())
     }

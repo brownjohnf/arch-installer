@@ -1,4 +1,5 @@
 use anyhow::{anyhow, format_err, Context, Result};
+use cmd_lib::run_fun;
 use dialoguer::{theme::ColorfulTheme, Confirm, Input, Select};
 use log::{debug, error, info, warn};
 use simplelog::{CombinedLogger, Config, LevelFilter, TermLogger, TerminalMode, WriteLogger};
@@ -46,6 +47,10 @@ struct Opt {
     // Path to the device to install the system on. Will prompt if not passed.
     #[structopt(short, long)]
     device: Option<PathBuf>,
+
+    // Keymap to use on the new system. Will prompt if not passed.
+    #[structopt(short, long)]
+    keymap: Option<String>,
 }
 
 // Set the mirrorlist for install.
@@ -67,7 +72,7 @@ fn main() -> Result<()> {
 
     // Parse the arguments.
     let opt = Opt::from_args();
-    debug!("{:?}", opt);
+    debug!("passed options: {:#?}", opt);
 
     // Configure the arguments, setting defaults and such.
     let filesystem = if let Some(f) = opt.filesystem {
@@ -97,7 +102,7 @@ fn main() -> Result<()> {
     let wifi = if let Some(w) = opt.wifi {
         w
     } else {
-        confirm("Would you like to configured WiFi?")?
+        confirm("Would you like to configure WiFi?")?
     };
     debug!("configure wifi: {}", wifi);
 
@@ -108,6 +113,19 @@ fn main() -> Result<()> {
         input("Default username?")?
     };
     debug!("default user: {}", user);
+
+    // Figure out which keymap to use.
+    let keymap = if let Some(k) = opt.keymap {
+        // If a keymap was passed, set it.
+        Some(k)
+    } else if confirm("Would you like to configure WiFi?")? {
+        // If it wasn't passed, ask if they want to set a keymap and if so, have
+        // them enter it.
+        Some(input("Keymap to use?")?)
+    } else {
+        None
+    };
+    debug!("setting keymap: {:?}", &keymap);
 
     // Select the device we're going to install the OS onto.
     let device = if let Some(d) = opt.device {
@@ -130,10 +148,8 @@ fn main() -> Result<()> {
     // Ensure the system is booted in EFI.
     assert_efi()?;
 
-    // Ensure the ZFS module is present
-    if !exec(&["modprobe", "zfs"])?.status.success() {
-        return Err(anyhow!("zfs module is not loaded"));
-    }
+    // Make sure any dependencies the filesystem needs are present.
+    filesystem.assert_dependencies()?;
 
     // Make sure the user understands this is going to be destructive.
     if !confirm("Installation will be destructive; continue?")? {
@@ -142,21 +158,19 @@ fn main() -> Result<()> {
     }
 
     // Set the datetime from NTP.
-    if !exec(&["timedatectl", "set-ntp", "true"])?.status.success() {
-        return Err(anyhow!("error setting system time from ntp"));
+    if let Err(e) = run_fun!(timedatectl set-ntp true) {
+        return Err(anyhow!("error setting system time from ntp: {}", e));
     }
 
     // Rank the mirrors, but only if we're not cleaning up, indicating this is a
     // fresh run. This is because ranking takes a while. This will just write to
     // the ISO.
-    if !clean {
-        rankmirrors()?;
-    }
-
-    // Clean up the system if was requested. This is mostly needed if the
-    // installer has been run before unsuccessfully.
     if clean {
         filesystem.cleanup()?;
+    } else {
+        // Clean up the system if no cleanup was requested. This is mostly
+        // needed if the installer has been run before unsuccessfully.
+        rankmirrors()?;
     }
 
     // Partition the disk. Make a large /boot partition so that we have room for
@@ -185,8 +199,8 @@ fn main() -> Result<()> {
 // Wipe any existing data from the partitions. This will get rid of any extant
 // file contents which which still be around even after wiping the inode data.
 fn wipe(partition: &Device) -> Result<()> {
-    if !exec(&["wipefs", &partition.dev()])?.status.success() {
-        return Err(format_err!("error wiping partition {:?}", partition));
+    if let Err(e) = run_fun!(wipefs "$partition.dev()") {
+        return Err(format_err!("error wiping partition {:?}: {}", partition, e));
     }
 
     Ok(())
@@ -194,41 +208,16 @@ fn wipe(partition: &Device) -> Result<()> {
 
 /// Create partitions.
 fn partition(device: &Device) -> Result<()> {
-    if !exec(&[
-        "parted",
-        "--script",
-        &device.dev(),
-        "--",
-        // Make the partition table.
-        "mklabel",
-        "gpt",
-        // Make the boot partition for EFI.
-        "mkpart",
-        "ESP",
-        "fat32",
-        "1Mib",
-        "2GiB",
-        "set",
-        "1",
-        "boot",
-        "on",
-        // Make a persistent small partition for things like encrypted storage.
-        "mkpart",
-        "primary",
-        "ext4",
-        "2GiB",
-        "3GiB",
-        // Make the ZFS root partition.
-        "mkpart",
-        "primary",
-        "ext4",
-        "3GiB",
-        "100%",
-    ])?
-    .status
-    .success()
+    // Make 3 partitions:
+    // * 2G boot
+    // * 1G secrets/encryption/whatev partition
+    // * remaining root partition, for ZFS
+    if let Err(e) = run_fun!(parted --script "$device.dev()" -- mklabel gpt mkpart
+                              ESP fat32 "1Mib" "2GiB" set 1 boot on mkpart
+                              primary ext4 "2GiB" "3GiB" mkpart primary ext4
+                              "3GiB" 100%)
     {
-        return Err(format_err!("error partitioning disk"));
+        return Err(format_err!("error partitioning disk: {}", e));
     }
 
     Ok(())

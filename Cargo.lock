@@ -44,6 +44,7 @@ name = "arch-installer"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "cmd_lib",
  "cursive",
  "dialoguer",
  "env_logger",
@@ -118,6 +119,12 @@ dependencies = [
  "unicode-width",
  "vec_map",
 ]
+
+[[package]]
+name = "cmd_lib"
+version = "0.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "33a91a99d3a2bdb10c47760602a1c1f01a4025c59db336864b968552475ebde6"
 
 [[package]]
 name = "console"

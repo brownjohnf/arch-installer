@@ -2,9 +2,11 @@ use crate::Device;
 use anyhow::{format_err, Result};
 use std::fmt::{Debug, Display};
 
+mod ext4;
 mod fat;
 mod zfs;
 
+pub(crate) use ext4::Ext4;
 pub(crate) use fat::FAT32;
 pub(crate) use zfs::ZFS;
 

@@ -1,7 +1,7 @@
 use anyhow::Result;
 use log::{debug, error, info, warn};
 use std::{
-    fs,
+    fmt, fs,
     path::{Path, PathBuf},
 };
 
@@ -93,6 +93,12 @@ impl Device {
 
         out.sort_by(|a, b| b.bytes.cmp(&a.bytes));
         Ok(out)
+    }
+}
+
+impl fmt::Display for Device {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.dev())
     }
 }
 

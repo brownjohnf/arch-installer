@@ -1,6 +1,7 @@
 *.swo
 *.swp
 *.iso
+arch-installer.log
 
 
 #Added by cargo

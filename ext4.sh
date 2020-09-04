@@ -45,7 +45,7 @@ function add_packages() {
 #
 # $1: Root partition
 function additional_boot_options() {
-  echo root=$(blkid -o export $1 | grep PTUUID | sed 's/PTUUID/PARTUUID/') rw
+  echo root=$(blkid -o export $1 | grep -E '(PTUUID|PARTUUID)' | sed 's/PTUUID/PARTUUID/') rw
 }
 
 function first_boot_script() {

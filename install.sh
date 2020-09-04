@@ -261,7 +261,7 @@ EOF
 
 # Boot the standard kernel by default
 cat <<EOF > /mnt/boot/loader/loader.conf
-default arch
+default arch.conf
 timeout 3
 EOF
 
